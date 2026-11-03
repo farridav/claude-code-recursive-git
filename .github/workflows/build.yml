@@ -38,7 +38,7 @@ jobs:
       - name: Package
         run: make package
 
-  update_release_draft:
+  release:
     permissions:
       contents: write
       pull-requests: read
@@ -48,9 +48,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # A version bump in plugin.json, merged, is a release: the draft takes
-      # that version and is published below. Until the next bump the version
-      # is already tagged, so the draft previews the next one from the labels.
+      # A merged version bump in plugin.json is a release. Any other push to
+      # main finds its version already tagged and does nothing, so no draft
+      # sits waiting to be published by hand.
       - name: Read the plugin's version
         id: plugin
         run: |
@@ -62,10 +62,12 @@ jobs:
             echo "is_new=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: release-drafter/release-drafter@v7
+      - name: Draft the release notes
+        if: steps.plugin.outputs.is_new == 'true'
+        uses: release-drafter/release-drafter@v7
         with:
           config-name: release-drafter.yml
-          version: ${{ steps.plugin.outputs.is_new == 'true' && steps.plugin.outputs.version || '' }}
+          version: ${{ steps.plugin.outputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
