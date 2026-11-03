@@ -135,18 +135,32 @@ Run it from a checkout:
 claude --plugin-dir /path/to/claude-code-recursive-git
 ```
 
-The engine then writes this build's API types into `.claude-plugin/types/`, which `tsconfig.json` extends:
+| Command | What it does |
+| --- | --- |
+| `make deps` | Installs the Claude Code CLI version the checks run on (pinned in the Makefile) |
+| `make check` | `claude plugin validate .`: the manifest, the marketplace and the hooks module |
+| `make test` | `claude plugin test .`: the tests in `tests/`, run against the engine |
+| `make smoke` | Builds a scratch workspace of real git repos (worktree, submodule, dependency checkouts, a deep repo) and checks what the scan finds |
+| `make typecheck` | `tsc -p .`, once Claude Code has written its API types into `.claude-plugin/types/`, which it does when it loads the mod |
+| `make package` | Zips the mod as `dist/multi-repo-v<version>.plugin` |
 
-```sh
-tsc -p .
-claude plugin validate .
-claude plugin test .
-```
+CI (`.github/workflows/build.yml`) runs `deps`, `check`, `test`, `smoke` and `package` on every push and pull request to `main`. `typecheck` stays local: the API types come from a Claude Code session, and CI has none.
 
 - `hooks/register.tsx` is the hooks module.
 - `hooks/git.ts` holds discovery, git parsing and the text Claude reads, as plain functions.
 - `types/index.d.ts` is the contract for the values kept in `$.state`.
 - Tests are in `tests/`, one file for what each module covers.
+
+## Releasing
+
+[Release Drafter](https://github.com/release-drafter/release-drafter) keeps a draft release up to date as pull requests merge to `main`. It sorts them by label (`feature`/`enhancement`, `fix`/`bugfix`/`bug`, `chore`) and picks the next version from `major`, `minor` or `patch` labels (patch by default).
+
+Publishing the draft runs `.github/workflows/release.yml`, which:
+
+1. sets `plugin.json`'s version from the tag
+2. runs the checks and tests
+3. attaches `multi-repo-v<version>.plugin` to the release
+4. commits the version to `main`, since plugins install from the repo
 
 ## Author
 

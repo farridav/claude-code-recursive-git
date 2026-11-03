@@ -1,0 +1,49 @@
+---
+name: Release
+on:
+  release:
+    types: published
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set version from tag
+        run: make version VERSION=${GITHUB_REF_NAME#v}
+
+      - name: Run checks and tests
+        run: |
+          make deps
+          make check
+          make test
+
+      - name: Attach the packaged plugin to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" "$(make --silent package)" --clobber
+
+      # Plugins install from the repo, so main's plugin.json carries the
+      # released version; `claude plugin update` reads it from there.
+      - name: Record the version on main
+        run: |
+          git fetch --depth 1 origin main
+          git checkout -B main origin/main
+          make version VERSION=${GITHUB_REF_NAME#v}
+          if git diff --quiet; then
+            echo "main already at ${GITHUB_REF_NAME#v}"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release ${GITHUB_REF_NAME}"
+          git push origin main
