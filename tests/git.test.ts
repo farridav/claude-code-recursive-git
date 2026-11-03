@@ -17,6 +17,7 @@ import {
   resolvePath,
   shortState,
   statusLine,
+  treeRows,
   worktreeName,
 } from '../hooks/git'
 
@@ -182,6 +183,19 @@ describe('git', () => {
       '    └── worker ✓ ⎇ main',
     ])
     expect(describeRepo(api)).toContain('Error: fatal: not a git repository: /old/.git/worktrees/xjp')
+  })
+
+  test('a folded folder hides its repos and counts them', () => {
+    const clean = parseStatus('/ws/api', '# branch.oid aaaaaaa\n# branch.head main\n')
+    const api = { name: 'api', path: '/ws/api', defaultBranch: 'main', recent: [], tree: clean, worktrees: [] }
+    const repos = [api, { ...api, name: 'group/a/b/deep' }, { ...api, name: 'services/web' }, { ...api, name: 'services/worker' }]
+
+    const rows = treeRows(repos, new Set(['services', 'group/a/b']))
+    expect(rows.map(row => `${row.prefix}${row.name} ${row.foldedRepos}`)).toEqual([
+      '├── api 0',
+      '├── group/a/b/ 1',
+      '└── services/ 2',
+    ])
   })
 
   test('the band skips repos that are only behind; the status line counts in words', () => {

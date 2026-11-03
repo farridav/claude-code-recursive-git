@@ -4,7 +4,9 @@ import type { FsEntry, On } from 'claude-code'
 const dir = (name: string): FsEntry => ({ name, kind: 'dir', size: 0, mtimeMs: 0, isLink: false })
 
 const TREE: Record<string, FsEntry[]> = {
-  '/ws': [dir('api'), dir('web'), dir('node_modules')],
+  '/ws': [dir('api'), dir('web'), dir('node_modules'), dir('services')],
+  '/ws/services': [dir('worker')],
+  '/ws/services/worker': [dir('.git')],
   '/ws/api': [dir('.git'), dir('src')],
   '/ws/web': [dir('.git')],
   '/ws/node_modules': [dir('dep')],
@@ -90,6 +92,13 @@ describe('register', () => {
       expect(await pane.find({ type: 'Text', text: /web/ })).toBeDefined()
       expect(await pane.find({ type: 'Text', text: /api-fix/ })).toBeDefined()
       expect(await pane.find({ key: 'refresh' })).toBeDefined()
+
+      expect(await pane.find({ type: 'Text', text: /^worker$/ })).toBeDefined()
+      await pane.press({ key: 'fold:services' })
+      expect(await pane.find({ type: 'Text', text: /^worker$/ })).toBeUndefined()
+      expect(await pane.find({ type: 'Text', text: / 1 repo$/ })).toBeDefined()
+      await pane.press({ key: 'fold:services' })
+      expect(await pane.find({ type: 'Text', text: /^worker$/ })).toBeDefined()
       await pane.unmount()
     }
   })

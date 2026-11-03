@@ -414,18 +414,29 @@ export type TreeRow = {
   prefix: string
   kind: 'folder' | 'repo' | 'worktree'
   name: string
+  /** The folder's or repo's path under the root, or the worktree's own path: what a fold is keyed by. */
+  path: string
   tree: TreeStatus | null
   defaultBranch: string | null
+  /** For a folded folder, how many repos it hides; otherwise 0. */
+  foldedRepos: number
 }
 
 type TreeNode = { children: Map<string, TreeNode>; repo: RepoStatus | null }
 
+function countRepos(node: TreeNode): number {
+  let count = node.repo ? 1 : 0
+  for (const child of node.children.values()) count += countRepos(child)
+  return count
+}
+
 /**
  * The repos as `tree` draws folders: each folder once, its repos beneath it,
  * and each repo's worktrees beneath the repo. A chain of folders holding only
- * one folder each is drawn on one line (`group/a/b/`).
+ * one folder each is drawn on one line (`group/a/b/`). A folder whose path is
+ * in `folded` is drawn without what is inside it.
  */
-export function treeRows(repos: readonly RepoStatus[]): TreeRow[] {
+export function treeRows(repos: readonly RepoStatus[], folded: ReadonlySet<string> = new Set()): TreeRow[] {
   const top: TreeNode = { children: new Map(), repo: null }
   for (const repo of repos) {
     let node = top
@@ -438,7 +449,7 @@ export function treeRows(repos: readonly RepoStatus[]): TreeRow[] {
   }
 
   const rows: TreeRow[] = []
-  function walk(node: TreeNode, prefix: string): void {
+  function walk(node: TreeNode, prefix: string, under: string): void {
     const entries = [...node.children]
     entries.forEach(([part, child], index) => {
       const isLast = index === entries.length - 1
@@ -446,11 +457,12 @@ export function treeRows(repos: readonly RepoStatus[]): TreeRow[] {
       const below = prefix + (isLast ? '    ' : '│   ')
       const repo = child.repo
       if (repo) {
-        rows.push({ prefix: branch, kind: 'repo', name: part, tree: repo.tree, defaultBranch: repo.defaultBranch })
+        const { defaultBranch } = repo
+        rows.push({ prefix: branch, kind: 'repo', name: part, path: repo.name, tree: repo.tree, defaultBranch, foldedRepos: 0 })
         repo.worktrees.forEach((tree, at) => {
           const connector = at === repo.worktrees.length - 1 ? '└── ' : '├── '
           const name = worktreeName(tree.path)
-          rows.push({ prefix: below + connector, kind: 'worktree', name, tree, defaultBranch: repo.defaultBranch })
+          rows.push({ prefix: below + connector, kind: 'worktree', name, path: tree.path, tree, defaultBranch, foldedRepos: 0 })
         })
         return
       }
@@ -462,11 +474,14 @@ export function treeRows(repos: readonly RepoStatus[]): TreeRow[] {
         name += `/${only[0]}`
         folder = only[1]
       }
-      rows.push({ prefix: branch, kind: 'folder', name: `${name}/`, tree: null, defaultBranch: null })
-      walk(folder, below)
+      const path = under + name
+      const isFolded = folded.has(path)
+      const foldedRepos = isFolded ? countRepos(folder) : 0
+      rows.push({ prefix: branch, kind: 'folder', name: `${name}/`, path, tree: null, defaultBranch: null, foldedRepos })
+      if (!isFolded) walk(folder, below, `${path}/`)
     })
   }
-  walk(top, '')
+  walk(top, '', '')
   return rows
 }
 
@@ -481,7 +496,7 @@ export function formatTable(repos: readonly RepoStatus[]): string {
     .join('\n')
 }
 
-function plural(count: number, noun: string): string {
+export function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`
 }
 

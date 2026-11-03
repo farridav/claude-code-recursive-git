@@ -41,6 +41,8 @@ declare module 'claude-code' {
       workspaceRoot: string | null
       /** What the model was last told, per tree path: a fingerprint of its state. */
       reported: Record<string, string> | null
+      /** The folders folded shut in the /repos pane, by path under the root. */
+      folded: string[]
     }
   }
 }

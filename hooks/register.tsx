@@ -13,6 +13,7 @@ import {
   formatSnapshot,
   formatTable,
   marks,
+  plural,
   needsAttention,
   scanAll,
   shortState,
@@ -41,6 +42,7 @@ type Session = Io & {
 const reposAtom = atom({ plugin: 'multi-repo', key: 'repos' } as const, [], { shape: 'repos-1' })
 const rootAtom = atom({ plugin: 'multi-repo', key: 'workspaceRoot' } as const, null)
 const reportedAtom = atom({ plugin: 'multi-repo', key: 'reported' } as const, null)
+const foldedAtom = atom({ plugin: 'multi-repo', key: 'folded' } as const, [])
 
 export const register: Register = (on, options) => {
   const maxDepth = Number(options.scanDepth ?? 4)
@@ -199,7 +201,8 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'repos' }, async $ => {
     const repos = await refresh()
     await $.ui.open({ id: PANE, title: 'Repos' })
-    return { text: formatTable(repos) }
+    const root = (await read($, rootAtom)) ?? ''
+    return { text: `Repos under ${root}\n${formatTable(repos)}` }
   })
 
   on('command.run', { command: 'repos-fetch' }, async $ => {
@@ -248,6 +251,9 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const repos = await read($, reposAtom)
     const root = (await read($, rootAtom)) ?? ''
+    const folded = await read($, foldedAtom)
+    const toggle = (path: string) =>
+      update($, foldedAtom, paths => (paths.includes(path) ? paths.filter(one => one !== path) : [...paths, path]))
     return (
       <Box flexDirection="column">
         <Box>
@@ -268,20 +274,29 @@ export const register: Register = (on, options) => {
           {repos.length} repos under {root}
         </Text>
         {repos.length === 0 && <Text dimColor>No git repos found.</Text>}
-        {treeRows(repos).map(row => (
-          <Text wrap="truncate">
-            <Text dimColor>{row.prefix}</Text>
-            <Text
-              bold={row.kind !== 'worktree'}
-              italic={row.kind === 'worktree'}
-              color={row.kind === 'folder' ? 'suggestion' : undefined}
-            >
-              {row.name}
+        {treeRows(repos, new Set(folded)).map(row =>
+          row.kind === 'folder' ? (
+            <Box>
+              <Text dimColor>{row.prefix}</Text>
+              <Button plain key={`fold:${row.path}`} label={row.name} onPress={() => void toggle(row.path)}>
+                <Text bold color="suggestion">
+                  {row.foldedRepos ? '▸ ' : '▾ '}
+                  {row.name}
+                </Text>
+                {row.foldedRepos > 0 && <Text dimColor>{` ${plural(row.foldedRepos, 'repo')}`}</Text>}
+              </Button>
+            </Box>
+          ) : (
+            <Text wrap="truncate">
+              <Text dimColor>{row.prefix}</Text>
+              <Text bold={row.kind === 'repo'} italic={row.kind === 'worktree'}>
+                {row.name}
+              </Text>
+              {row.tree &&
+                marks(row.tree, row.defaultBranch).map(mark => <Text color={mark.color}>{` ${mark.text}`}</Text>)}
             </Text>
-            {row.tree &&
-              marks(row.tree, row.defaultBranch).map(mark => <Text color={mark.color}>{` ${mark.text}`}</Text>)}
-          </Text>
-        ))}
+          ),
+        )}
       </Box>
     )
   })

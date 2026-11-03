@@ -19,7 +19,7 @@ This mod finds every repo under the folder and gives each one that single-repo e
 
 ### `/repos`
 
-Opens a pane with every repo drawn as a tree, the way `tree` draws folders. Each repo's linked worktrees hang beneath it, named by their folder less any `<repo>--` prefix. The pane has **Refresh** (`r`) and **Fetch all** (`f`) buttons, and the same tree, without colour, is printed in the transcript.
+Opens a pane with every repo drawn as a tree, the way `tree` draws folders. Each repo's linked worktrees hang beneath it, named by their folder less any `<repo>--` prefix. Click a folder in the pane to fold it away (`▸`) or open it again (`▾`). The pane has **Refresh** (`r`) and **Fetch all** (`f`) buttons, and the same tree, without colour or folding, is printed in the transcript.
 
 ```
 ├── data-pipelines/
