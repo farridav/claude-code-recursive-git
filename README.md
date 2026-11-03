@@ -157,7 +157,7 @@ CI (`.github/workflows/build.yml`) runs `deps`, `check`, `test`, `smoke` and `pa
 2. Merge it. [Release Drafter](https://github.com/release-drafter/release-drafter) updates the draft release to `vx.y.z`, with merged pull requests sorted by label (`feature`/`enhancement`, `fix`/`bugfix`/`bug`, `chore`/`dependencies`/`documentation`).
 3. Publish the draft. `.github/workflows/release.yml` checks the tag matches `plugin.json`, runs the checks and tests, and attaches `multi-repo-vx.y.z.plugin` to the release.
 
-The version lives in `plugin.json` and changes only through pull requests, so CI never pushes to `main`. Labels are kept in `.github/labels.yml` and synced by `.github/workflows/labels.yml`.
+The version lives in `plugin.json` and changes only through pull requests, so CI never pushes to `main`.
 
 ## Contributing
 
