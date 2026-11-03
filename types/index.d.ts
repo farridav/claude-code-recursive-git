@@ -43,6 +43,8 @@ declare module 'claude-code' {
       reported: Record<string, string> | null
       /** The folders folded shut in the /repos pane, by path under the root. */
       folded: string[]
+      /** The pane's job in flight (`Fetching`), or null; the pane ignores presses until it ends. */
+      busy: string | null
     }
   }
 }

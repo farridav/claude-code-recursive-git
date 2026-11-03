@@ -280,6 +280,90 @@ export async function fetchAll(io: Io, repos: readonly RepoStatus[]): Promise<st
   return failed.filter((name): name is string => name !== null)
 }
 
+// ---------------------------------------------------------------- worktree upkeep
+
+/** A linked worktree and the repo it belongs to. */
+export type Linked = { repo: RepoStatus; tree: TreeStatus }
+
+/** `git worktree prune` in every repo with a missing worktree. Returns how many it forgot and where it failed. */
+export async function pruneMissing(io: Io, repos: readonly RepoStatus[]): Promise<{ pruned: number; failed: string[] }> {
+  const withMissing = repos.filter(repo => repo.worktrees.some(tree => tree.isPrunable))
+  const results = await mapLimit(withMissing, CONCURRENCY, async repo => ({
+    repo,
+    isOk: (await git(io, repo.path, ['worktree', 'prune'])).exitCode === 0,
+  }))
+  const pruned = results
+    .filter(result => result.isOk)
+    .reduce((sum, result) => sum + result.repo.worktrees.filter(tree => tree.isPrunable).length, 0)
+  return { pruned, failed: results.filter(result => !result.isOk).map(result => result.repo.name) }
+}
+
+/**
+ * Worktrees whose work is done: clean, nothing unpushed, and the branch's
+ * tip already in the main branch, locally or on origin. A branch still at
+ * the main branch's tip is left alone: it is more likely new than merged.
+ * Squash merges leave the tip out of main, so those are not found.
+ */
+export async function mergedWorktrees(io: Io, repos: readonly RepoStatus[]): Promise<Linked[]> {
+  const candidates = repos.flatMap(repo =>
+    repo.worktrees
+      .filter(
+        tree =>
+          tree.branch !== null &&
+          repo.defaultBranch !== null &&
+          tree.branch !== repo.defaultBranch &&
+          tree.error === null &&
+          !tree.isPrunable &&
+          !isDirty(tree) &&
+          tree.ahead === 0,
+      )
+      .map(tree => ({ repo, tree })),
+  )
+  const isMerged = await mapLimit(candidates, CONCURRENCY, async ({ repo, tree }) => {
+    const bases = [`refs/heads/${repo.defaultBranch}`, `refs/remotes/origin/${repo.defaultBranch}`]
+    for (const base of bases) {
+      const tip = await git(io, repo.path, ['rev-parse', '--verify', '--quiet', base])
+      if (tip.exitCode !== 0 || tip.stdout.trim().startsWith(tree.head ?? '-')) continue
+      const ran = await git(io, repo.path, ['merge-base', '--is-ancestor', `refs/heads/${tree.branch}`, base])
+      if (ran.exitCode === 0) return true
+    }
+    return false
+  })
+  return candidates.filter((_, index) => isMerged[index])
+}
+
+export function unreadableWorktrees(repos: readonly RepoStatus[]): Linked[] {
+  return repos.flatMap(repo => repo.worktrees.filter(tree => tree.error !== null).map(tree => ({ repo, tree })))
+}
+
+/**
+ * Removes each worktree with `git worktree remove`, never `--force`, so git
+ * keeps any with uncommitted changes. Branches are kept. `repair` first
+ * reconnects a worktree whose link to its repo is stale (the repo moved), so
+ * git can check it for changes.
+ */
+export async function removeWorktrees(
+  io: Io,
+  worktrees: readonly Linked[],
+  repair: boolean,
+): Promise<{ removed: Linked[]; kept: { worktree: Linked; reason: string }[] }> {
+  const removed: Linked[] = []
+  const kept: { worktree: Linked; reason: string }[] = []
+  // One at a time: two removals in the same repo would race for its lock.
+  for (const worktree of worktrees) {
+    const { repo, tree } = worktree
+    if (repair) await git(io, repo.path, ['worktree', 'repair', tree.path])
+    const ran = await git(io, repo.path, ['worktree', 'remove', tree.path])
+    if (ran.exitCode === 0) removed.push(worktree)
+    else {
+      const message = ran.stderr.trim().split('\n')[0] ?? ''
+      const reason = /modified or untracked/.test(message) ? 'has uncommitted changes' : message || 'git refused'
+      kept.push({ worktree, reason })
+    }
+  }
+  return { removed, kept }
+}
+
 // ---------------------------------------------------------------- text
 
 export function isDirty(tree: TreeStatus): boolean {

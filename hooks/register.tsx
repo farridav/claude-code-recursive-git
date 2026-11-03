@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register, Timer } from 'claude-code'
 
 import type { RepoStatus } from '../types'
-import type { Io } from './git'
+import type { Io, Linked } from './git'
 import {
   DEFAULT_IGNORE,
   GUIDANCE,
@@ -12,13 +12,18 @@ import {
   formatChanges,
   formatSnapshot,
   formatTable,
+  mergedWorktrees,
   marks,
   plural,
+  pruneMissing,
+  removeWorktrees,
   needsAttention,
   scanAll,
   shortState,
   summaryLine,
   treeRows,
+  unreadableWorktrees,
+  worktreeName,
 } from './git'
 
 const PANE = 'multi-repo'
@@ -41,6 +46,7 @@ const reposAtom = atom({ plugin: 'multi-repo', key: 'repos' } as const, [], { sh
 const rootAtom = atom({ plugin: 'multi-repo', key: 'workspaceRoot' } as const, null)
 const reportedAtom = atom({ plugin: 'multi-repo', key: 'reported' } as const, null)
 const foldedAtom = atom({ plugin: 'multi-repo', key: 'folded' } as const, [])
+const busyAtom = atom({ plugin: 'multi-repo', key: 'busy' } as const, null)
 
 export const register: Register = (on, options) => {
   const maxDepth = Number(options.scanDepth ?? 4)
@@ -249,27 +255,115 @@ export const register: Register = (on, options) => {
     const repos = await read($, reposAtom)
     const root = (await read($, rootAtom)) ?? ''
     const folded = await read($, foldedAtom)
+    const busy = await read($, busyAtom)
     const toggle = (path: string) =>
       update($, foldedAtom, paths => (paths.includes(path) ? paths.filter(one => one !== path) : [...paths, path]))
+
+    // Runs one job at a time, shows it in the pane while it runs, and toasts what it did.
+    const job = (doing: string, work: (s: Session) => Promise<string>) => async () => {
+      if (!session || (await read($, busyAtom))) return
+      await update($, busyAtom, () => doing)
+      try {
+        $.ui.toast(await work(session))
+      } catch (error) {
+        $.ui.toast(`${doing} failed: ${String(error)}`)
+      } finally {
+        await update($, busyAtom, () => null)
+      }
+    }
+
+    // Confirms, removes, then logs each removal to the transcript so there is a record.
+    const removeAll = async (s: Session, found: Linked[], what: string, repair: boolean) => {
+      if (found.length === 0) return `No ${what} worktrees to remove`
+      const names = found.map(({ tree }) => worktreeName(tree.path)).join(', ')
+      const question = `Remove ${plural(found.length, `${what} worktree`)} (${names}) and keep their branches?`
+      const answer = await $.ui.ask(question, ['Remove', 'Cancel']).catch(() => 'Cancel')
+      if (answer !== 'Remove') return 'Nothing removed'
+      const { removed, kept } = await removeWorktrees(s, found, repair)
+      await refresh()
+      for (const { repo, tree } of removed) $.ui.log(`Removed worktree ${tree.path} (${repo.name})`)
+      for (const { worktree, reason } of kept) $.ui.log(`Kept worktree ${worktree.tree.path}: ${reason}`)
+      return [`Removed ${plural(removed.length, 'worktree')}`, kept.length ? `kept ${kept.length}, see the transcript` : '']
+        .filter(Boolean)
+        .join('; ')
+    }
+
+    const cwd = await $.session.cwd()
+    const buttons = [
+      {
+        key: 'refresh',
+        hotkey: 'r',
+        label: 'Refresh',
+        doing: 'Refreshing',
+        work: async () => `Refreshed ${plural((await refresh()).length, 'repo')}`,
+      },
+      {
+        key: 'fetch',
+        hotkey: 'f',
+        label: 'Fetch all',
+        doing: 'Fetching',
+        work: async (s: Session) => {
+          const failed = await fetchAll(s, await read($, reposAtom))
+          const behind = (await refresh()).filter(repo => repo.tree.behind > 0).length
+          if (failed.length) return `Fetch failed in: ${failed.join(', ')}`
+          return `Fetched every repo${behind ? `; ${plural(behind, 'repo')} behind` : ''}`
+        },
+      },
+      {
+        key: 'prune',
+        hotkey: 'p',
+        label: 'Prune missing',
+        doing: 'Pruning',
+        work: async (s: Session) => {
+          const { pruned, failed } = await pruneMissing(s, await read($, reposAtom))
+          await refresh()
+          if (failed.length) return `Prune failed in: ${failed.join(', ')}`
+          return pruned ? `Pruned ${plural(pruned, 'missing worktree')}` : 'No missing worktrees to prune'
+        },
+      },
+      {
+        key: 'merged',
+        hotkey: 'm',
+        label: 'Remove merged',
+        doing: 'Removing merged worktrees',
+        work: async (s: Session) => {
+          const merged = await mergedWorktrees(s, await read($, reposAtom))
+          // Never the worktree this session is working in.
+          const found = merged.filter(({ tree }) => cwd !== tree.path && !cwd.startsWith(`${tree.path}/`))
+          return removeAll(s, found, 'merged', false)
+        },
+      },
+      {
+        key: 'unreadable',
+        hotkey: 'u',
+        label: 'Remove unreadable',
+        doing: 'Removing unreadable worktrees',
+        work: async (s: Session) => removeAll(s, unreadableWorktrees(await read($, reposAtom)), 'unreadable', true),
+      },
+    ]
+
     return (
       <Box flexDirection="column">
-        <Box>
-          <Button key="refresh" hotkey="r" label="Refresh" onPress={() => void refresh()} />
-          <Text> </Text>
-          <Button
-            key="fetch"
-            hotkey="f"
-            label="Fetch all"
-            onPress={async () => {
-              const failed = session ? await fetchAll(session, await read($, reposAtom)) : []
-              await refresh()
-              $.ui.toast(failed.length ? `Fetch failed in: ${failed.join(', ')}` : 'Fetched every repo')
-            }}
-          />
+        <Box flexWrap="wrap" columnGap={1}>
+          {buttons.map(button => (
+            <Button
+              key={button.key}
+              hotkey={button.hotkey}
+              label={button.label}
+              dimColor={busy !== null}
+              onPress={job(button.doing, button.work)}
+            />
+          ))}
         </Box>
-        <Text dimColor wrap="truncate">
-          {repos.length} repos under {root}
-        </Text>
+        {busy ? (
+          <Text color="warning" wrap="truncate">
+            {busy}…
+          </Text>
+        ) : (
+          <Text dimColor wrap="truncate">
+            {plural(repos.length, 'repo')} under {root}
+          </Text>
+        )}
         {repos.length === 0 && <Text dimColor>No git repos found.</Text>}
         {treeRows(repos, new Set(folded)).map(row =>
           row.kind === 'folder' ? (

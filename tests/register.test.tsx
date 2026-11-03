@@ -112,6 +112,23 @@ describe('register', () => {
     }
   })
 
+  test('the pane says when each job is done', async ($, on) => {
+    workspace(on, { dirty: false })
+    const toasts: string[] = []
+    on('ui.toast', (_, e) => (toasts.push(e.text), { value: undefined }))
+    await $.session.start({ cwd: '/ws', surface: 'terminal', isInteractive: true })
+
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    for (const key of ['refresh', 'prune', 'merged', 'unreadable']) await pane.press({ key })
+    expect(toasts).toEqual([
+      'Refreshed 3 repos',
+      'No missing worktrees to prune',
+      'No merged worktrees to remove',
+      'No unreadable worktrees to remove',
+    ])
+    await pane.unmount()
+  })
+
   test('the first context carries a snapshot; later prompts carry only what changed', async ($, on) => {
     const state = { dirty: false }
     const clock = workspace(on, state)

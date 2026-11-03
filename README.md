@@ -19,7 +19,19 @@ This mod finds every repo under the folder and gives each one that single-repo e
 
 ### `/repos`
 
-Opens the pane, which also opens when the session starts, with every repo drawn as a tree, the way `tree` draws folders. Each repo's linked worktrees hang beneath it, named by their folder less any `<repo>--` prefix. Click a folder in the pane to fold it away (`▸`) or open it again (`▾`). The pane has **Refresh** (`r`) and **Fetch all** (`f`) buttons, and the same tree, without colour or folding, is printed in the transcript.
+Opens the pane, which also opens when the session starts, with every repo drawn as a tree, the way `tree` draws folders. Each repo's linked worktrees hang beneath it, named by their folder less any `<repo>--` prefix. Click a folder in the pane to fold it away (`▸`) or open it again (`▾`). The same tree, without colour or folding, is printed in the transcript.
+
+The pane's buttons run one job at a time. The pane says what is running, and a toast says what it did:
+
+| Button | What it does |
+| --- | --- |
+| **Refresh** (`r`) | Reads every repo's status now |
+| **Fetch all** (`f`) | `git fetch --all --prune` in every repo, as `/repos-fetch` does |
+| **Prune missing** (`p`) | `git worktree prune` in each repo with a `✗ missing` worktree: git forgets worktrees whose folder has gone. Nothing on disk is touched |
+| **Remove merged** (`m`) | Removes worktrees that are clean, have nothing unpushed, and whose branch is already in the main branch, locally or on `origin`. Asks first, with the list. Branches are kept. A branch still at the main branch's tip counts as new, not merged, and squash merges are not spotted |
+| **Remove unreadable** (`u`) | Reconnects each `✗ unreadable` worktree to its repo (`git worktree repair`), then removes it. Asks first, with the list. Any with uncommitted changes are kept |
+
+Removals never pass `--force`, so git keeps any worktree with uncommitted changes, and each removal or refusal is noted in the transcript.
 
 ```
 ├── data-pipelines/
@@ -130,7 +142,7 @@ The system prompt and the first message's context answer the same way for a whol
 
 ## What it calls on `$`
 
-`clock.after`, `clock.every`, `clock.now`, `command.register`, `fs.list`, `fs.read`, `process.run` (git), `session.cwd`, `session.root`, `state.get`, `state.set`, `tool.register`, `ui.open`, `ui.resolve`, `ui.toast`.
+`clock.after`, `clock.every`, `clock.now`, `command.register`, `fs.list`, `fs.read`, `process.run` (git), `session.cwd`, `session.root`, `state.get`, `state.set`, `tool.register`, `ui.ask`, `ui.log`, `ui.open`, `ui.resolve`, `ui.toast`.
 
 ## Git commands it runs
 
@@ -143,8 +155,12 @@ Each runs as `git --no-optional-locks -C <repo> …`, in the C locale, with `GIT
 | `log -5 --format=%h %s` | Every refresh, for each repo |
 | `symbolic-ref --short refs/remotes/origin/HEAD`, then `rev-parse --verify --quiet refs/heads/main` or `master` | Every refresh, to name the main branch |
 | `fetch --all --prune --quiet` | Only from `/repos-fetch` or the pane's Fetch all |
+| `worktree prune` | Only from the pane's Prune missing |
+| `rev-parse --verify --quiet`, `merge-base --is-ancestor` | Only from the pane's Remove merged, to find merged branches |
+| `worktree repair <path>` | Only from the pane's Remove unreadable |
+| `worktree remove <path>` | Only from the pane's Remove merged and Remove unreadable, after you confirm |
 
-Everything but the fetch is read-only.
+Everything else is read-only.
 
 ## Developing
 
