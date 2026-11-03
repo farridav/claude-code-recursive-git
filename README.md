@@ -215,12 +215,9 @@ CI (`.github/workflows/build.yml`) runs `deps`, `check`, `test`, `smoke` and `pa
 ## Releasing
 
 1. Bump the version in a pull request: `make version VERSION=x.y.z`.
-2. Merge it. [Release Drafter](https://github.com/release-drafter/release-drafter) updates the draft release to `vx.y.z`, with merged pull requests sorted by label (`feature`/`enhancement`, `fix`/`bugfix`/`bug`, `chore`/`dependencies`/`documentation`).
-3. Run the **Release** workflow from the Actions tab, rather than publishing the draft by hand. It finds the draft for `plugin.json`'s version, runs the checks and tests, attaches `multi-repo-vx.y.z.plugin` to the draft, then publishes it at the commit it tested.
+2. Merge it. That's the release: once the build passes on `main`, CI publishes `vx.y.z` with `multi-repo-vx.y.z.plugin` attached, and notes from the merged pull requests sorted by label (`feature`/`enhancement`, `fix`/`bugfix`/`bug`, `chore`/`dependencies`/`documentation`).
 
-Releases are immutable once published, so nothing can be added to or swapped in a release afterwards. That's why the file goes on before publishing.
-
-The version lives in `plugin.json` and changes only through pull requests, so CI never pushes to `main`.
+Between releases, [Release Drafter](https://github.com/release-drafter/release-drafter) keeps a draft of the next one up to date, so you can see what it will say. Releases are immutable once published, so CI attaches the package while the release is still a draft and publishes last. The version lives in `plugin.json` and changes only through pull requests, so CI never pushes to `main`.
 
 ## Contributing
 
