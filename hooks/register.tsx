@@ -21,7 +21,8 @@ import {
 } from './git'
 
 const PANE = 'multi-repo'
-const TOOL = 'mcp__multi-repo__repo_status'
+// A RegExp, not the name: the tool is typed only in sessions where it is registered.
+const TOOL = /^mcp__multi-repo__repo_status$/
 const REFRESH_AFTER = new Set(['Bash', 'Edit', 'Write', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree'])
 const REFRESH_DEBOUNCE_MS = 1_500
 const REFRESH_EVERY_MS = 60_000

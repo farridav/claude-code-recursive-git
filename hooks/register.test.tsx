@@ -49,6 +49,9 @@ const BAND = {
 
 const TYPED = { wait: false, origin: { kind: 'composer' } } as const
 
+// The tool is typed only in sessions where the mod has registered it, so its input is cast.
+const repoStatus = (args: Record<string, unknown> = {}) => ({ tool: 'mcp__multi-repo__repo_status', ...args }) as never
+
 const PANE = {
   plugin: 'multi-repo',
   component: 'Pane',
@@ -60,14 +63,14 @@ test('finds the repos and their worktrees, and leaves dependencies out', async (
   workspace(on, { dirty: true })
   await $.session.start({ cwd: '/ws', surface: 'terminal', isInteractive: true })
 
-  const ran = await $.tool.call({ tool: 'mcp__multi-repo__repo_status' })
+  const ran = await $.tool.call(repoStatus())
   expect(ran.result).toContain('## api')
   expect(ran.result).toContain('## web')
   expect(ran.result).toContain('/ws/.wt/api-fix')
   expect(ran.result).toContain('Main branch (you will usually use this for PRs): main')
   expect(String(ran.result)).not.toContain('node_modules')
 
-  const one = await $.tool.call({ tool: 'mcp__multi-repo__repo_status', repo: './web' })
+  const one = await $.tool.call(repoStatus({ repo: './web' }))
   expect(String(one.result)).not.toContain('## api')
 })
 
