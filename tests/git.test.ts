@@ -90,9 +90,9 @@ describe('git', () => {
     expect(resolvePath('/ws/a/b', '../../c/./d')).toBe('/ws/c/d')
     expect(relativePath('/ws', '/ws/services/api')).toBe('services/api')
     expect(relativePath('/ws', '/elsewhere/api')).toBe('../elsewhere/api')
-    expect(worktreeName('/ws/.worktrees/on-demand-forecasting--odfe-deterministic-skip')).toBe('odfe-deterministic-skip')
-    expect(worktreeName('/ws/.worktrees/ironfe-model--IFP-4511-subdept')).toBe('IFP-4511-subdept')
-    expect(worktreeName('/tmp/odfe_unchunk')).toBe('odfe_unchunk')
+    expect(worktreeName('/ws/.worktrees/orders--fix-refund-rounding')).toBe('fix-refund-rounding')
+    expect(worktreeName('/ws/.worktrees/old-name--PROJ-12-cleanup')).toBe('PROJ-12-cleanup')
+    expect(worktreeName('/tmp/spike_queue')).toBe('spike_queue')
     expect(worktreeName('/tmp/trailing--')).toBe('trailing--')
   })
 
@@ -166,7 +166,7 @@ describe('git', () => {
   test('formatTable draws the repos as a tree, with markers before the branch', () => {
     const clean = parseStatus('/ws/api', '# branch.oid aaaaaaa\n# branch.head main\n')
     const fix = { ...clean, path: '/ws/api/.worktrees/api--fix', branch: 'fix' }
-    const broken = { ...emptyTree('/elsewhere/xjp'), error: 'fatal: not a git repository: /old/.git/worktrees/xjp' }
+    const broken = { ...emptyTree('/elsewhere/stale'), error: 'fatal: not a git repository: /old/.git/worktrees/stale' }
     const api = { name: 'api', path: '/ws/api', defaultBranch: 'main', recent: [], tree: clean, worktrees: [fix, broken] }
     const deep = { ...api, name: 'group/a/b/deep', tree: { ...clean, branch: 'feature', staged: 1, untracked: 1, ahead: 2 }, worktrees: [] }
     const web = { ...api, name: 'services/web', tree: { ...clean, behind: 3 }, worktrees: [] }
@@ -175,14 +175,14 @@ describe('git', () => {
     expect(formatTable([api, deep, web, worker]).split('\n')).toEqual([
       '├── api ✓ ⎇ main',
       '│   ├── fix ✓ ⎇ fix',
-      '│   └── xjp ✗ unreadable',
+      '│   └── stale ✗ unreadable',
       '├── group/a/b/',
       '│   └── deep +1 ?1 ↑2 ⎇ feature',
       '└── services/',
       '    ├── web ↓3 ⎇ main',
       '    └── worker ✓ ⎇ main',
     ])
-    expect(describeRepo(api)).toContain('Error: fatal: not a git repository: /old/.git/worktrees/xjp')
+    expect(describeRepo(api)).toContain('Error: fatal: not a git repository: /old/.git/worktrees/stale')
   })
 
   test('a folded folder hides its repos and counts them', () => {

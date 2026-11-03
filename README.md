@@ -21,26 +21,20 @@ This mod finds every repo under the folder and gives each one that single-repo e
 
 Opens the pane, which also opens when the session starts, with every repo drawn as a tree, the way `tree` draws folders. Each repo's linked worktrees hang beneath it, named by their folder less any `<repo>--` prefix. Click a folder in the pane to fold it away (`▸`) or open it again (`▾`). The same tree, without colour or folding, is printed in the transcript.
 
-The pane's buttons run one job at a time. The pane says what is running, and a toast says what it did:
-
-| Button | What it does |
-| --- | --- |
-| **Refresh** (`r`) | Reads every repo's status now |
-| **Fetch all** (`f`) | `git fetch --all --prune` in every repo, as `/repos-fetch` does |
-| **Prune missing** (`p`) | `git worktree prune` in each repo with a `✗ missing` worktree: git forgets worktrees whose folder has gone. Nothing on disk is touched |
-| **Remove merged** (`m`) | Removes worktrees that are clean, have nothing unpushed, and whose branch is already in the main branch, locally or on `origin`. Asks first, with the list. Branches are kept. A branch still at the main branch's tip counts as new, not merged, and squash merges are not spotted |
-| **Remove unreadable** (`u`) | Reconnects each `✗ unreadable` worktree to its repo (`git worktree repair`), then removes it. Asks first, with the list. Any with uncommitted changes are kept |
-
-Removals never pass `--force`, so git keeps any worktree with uncommitted changes, and each removal or refusal is noted in the transcript.
-
 ```
-├── data-pipelines/
-│   ├── demand-pipeline ✓ ⎇ main
-│   │   └── resolve-promo-anti-join ✓ ⎇ fix/resolve-promo-anti-join
-│   └── feature-pipeline +2 ~1 ↑3 ⎇ fix/IFP-4937-assertion-latch
-│       └── xjp ✗ unreadable
+├── apps/
+│   ├── admin ✓ ⎇ main
+│   └── storefront ~1 ?1 ↑1 ⎇ feat/checkout-redesign
+├── infra/
+│   └── terraform ✓ ⎇ main
+│       └── staging-db ✓ ⎇ feat/staging-db
 └── services/
-    └── ironfe-status ↓2 ⎇ main
+    ├── orders ✓ ⎇ main
+    │   ├── fix-refund-rounding ~1 ⎇ fix/refund-rounding
+    │   ├── retry-webhooks ✓ ⎇ feat/retry-webhooks
+    │   └── spike-queue ✗ missing
+    ├── payments ↓3 ⎇ main
+    └── search ↑1 ⎇ main
 ```
 
 | Marker | Meaning |
@@ -50,6 +44,29 @@ Removals never pass `--force`, so git keeps any worktree with uncommitted change
 | `↑3` `↓2` | Commits ahead of and behind its upstream |
 | `⎇ main` | The branch, or `⎇ @abc1234` when detached |
 | `✗ missing` `✗ unreadable` | A worktree whose folder has gone, or that git can't read |
+
+The pane's buttons run one job at a time. While one runs the pane says so, and when it ends a toast says what it did.
+
+| Button | What it does |
+| --- | --- |
+| **Refresh** (`r`) | Reads every repo's status now |
+| **Fetch all** (`f`) | `git fetch --all --prune` in every repo, as `/repos-fetch` does |
+| **Prune missing** (`p`) | Clears git's records of worktrees whose folder has already gone (`✗ missing`), with `git worktree prune`. No files are deleted |
+| **Remove merged** (`m`) | Offers to remove worktrees whose work is done: clean, nothing unpushed, and the branch already in the main branch |
+| **Remove unreadable** (`u`) | Offers to remove worktrees git can't read (`✗ unreadable`), usually because their repo has moved since they were made |
+
+#### What the remove buttons do, and don't
+
+Removing a worktree deletes its folder, so both remove buttons go carefully:
+
+- Nothing goes without asking. The question lists each worktree's full path and its repo. Cancel, or closing the dialog, removes nothing.
+- Once you answer, every repo is read again, and only worktrees still in the state you were shown are removed.
+- `git worktree remove` does the removing, never with `--force`, so git refuses any worktree with modified or untracked files and leaves it be. Files git ignores, such as build output or a `.env`, go with the folder, and the question says so.
+- Branches and commits stay in the repo. Only the checkout goes, and `git worktree add` brings it back.
+- The worktree the session is working in is never offered.
+- Each removal, and each worktree git kept, is noted in the transcript.
+
+Remove merged counts a branch as merged when its tip is in the main branch, locally or on `origin`. A branch still at the main branch's tip counts as new, and squash merges aren't spotted, so both are left alone. Remove unreadable first runs `git worktree repair`, which only rewrites git's link between the worktree and its repo, so git can check the worktree for changes. Worktrees can live outside the workspace (`~/.cursor/worktrees/…`), and the buttons act on the paths git lists for each repo, wherever they are.
 
 ### `/repos-fetch`
 
@@ -157,10 +174,10 @@ Each runs as `git --no-optional-locks -C <repo> …`, in the C locale, with `GIT
 | `fetch --all --prune --quiet` | Only from `/repos-fetch` or the pane's Fetch all |
 | `worktree prune` | Only from the pane's Prune missing |
 | `rev-parse --verify --quiet`, `merge-base --is-ancestor` | Only from the pane's Remove merged, to find merged branches |
-| `worktree repair <path>` | Only from the pane's Remove unreadable |
-| `worktree remove <path>` | Only from the pane's Remove merged and Remove unreadable, after you confirm |
+| `worktree repair -- <path>` | Only from the pane's Remove unreadable, after you confirm |
+| `worktree remove -- <path>` | Only from the pane's Remove merged and Remove unreadable, after you confirm |
 
-Everything else is read-only.
+Everything else only reads. The fetch is the only command that uses the network, and it runs only when you ask for it.
 
 ## Developing
 

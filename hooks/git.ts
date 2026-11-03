@@ -57,7 +57,7 @@ export function relativePath(from: string, to: string): string {
 
 /**
  * A worktree's folder name, less the `<repo>--` it is usually made with:
- * `on-demand-forecasting--odfe-skip` is shown as `odfe-skip`.
+ * `orders--fix-refund-rounding` is shown as `fix-refund-rounding`.
  */
 export function worktreeName(path: string): string {
   const name = path.slice(path.lastIndexOf('/') + 1)
@@ -321,9 +321,11 @@ export async function mergedWorktrees(io: Io, repos: readonly RepoStatus[]): Pro
   )
   const isMerged = await mapLimit(candidates, CONCURRENCY, async ({ repo, tree }) => {
     const bases = [`refs/heads/${repo.defaultBranch}`, `refs/remotes/origin/${repo.defaultBranch}`]
+    const branchTip = await git(io, repo.path, ['rev-parse', '--verify', '--quiet', `refs/heads/${tree.branch}`])
+    if (branchTip.exitCode !== 0) return false
     for (const base of bases) {
-      const tip = await git(io, repo.path, ['rev-parse', '--verify', '--quiet', base])
-      if (tip.exitCode !== 0 || tip.stdout.trim().startsWith(tree.head ?? '-')) continue
+      const baseTip = await git(io, repo.path, ['rev-parse', '--verify', '--quiet', base])
+      if (baseTip.exitCode !== 0 || baseTip.stdout.trim() === branchTip.stdout.trim()) continue
       const ran = await git(io, repo.path, ['merge-base', '--is-ancestor', `refs/heads/${tree.branch}`, base])
       if (ran.exitCode === 0) return true
     }
@@ -337,10 +339,11 @@ export function unreadableWorktrees(repos: readonly RepoStatus[]): Linked[] {
 }
 
 /**
- * Removes each worktree with `git worktree remove`, never `--force`, so git
- * keeps any with uncommitted changes. Branches are kept. `repair` first
- * reconnects a worktree whose link to its repo is stale (the repo moved), so
- * git can check it for changes.
+ * Removes each worktree with `git worktree remove`, never `--force`: git
+ * refuses any with modified or untracked files, and keeps it. Files git
+ * ignores (build output, `.env`) go with the folder. Branches and commits
+ * stay in the repo. `repair` first points a worktree whose link to its repo
+ * is stale (the repo moved) back at the repo, so git can check it for changes.
  */
 export async function removeWorktrees(
   io: Io,
@@ -352,8 +355,8 @@ export async function removeWorktrees(
   // One at a time: two removals in the same repo would race for its lock.
   for (const worktree of worktrees) {
     const { repo, tree } = worktree
-    if (repair) await git(io, repo.path, ['worktree', 'repair', tree.path])
-    const ran = await git(io, repo.path, ['worktree', 'remove', tree.path])
+    if (repair) await git(io, repo.path, ['worktree', 'repair', '--', tree.path])
+    const ran = await git(io, repo.path, ['worktree', 'remove', '--', tree.path])
     if (ran.exitCode === 0) removed.push(worktree)
     else {
       const message = ran.stderr.trim().split('\n')[0] ?? ''

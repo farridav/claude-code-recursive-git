@@ -23,7 +23,6 @@ import {
   summaryLine,
   treeRows,
   unreadableWorktrees,
-  worktreeName,
 } from './git'
 
 const PANE = 'multi-repo'
@@ -64,6 +63,8 @@ export const register: Register = (on, options) => {
   let scanning: Promise<RepoStatus[]> | null = null
   let lastScanAt = 0
   let pendingRefresh: Timer | null = null
+  // Set before the first await, so a second press can't start a job alongside the first.
+  let isBusy = false
 
   async function refresh(): Promise<RepoStatus[]> {
     const s = session
@@ -145,6 +146,8 @@ export const register: Register = (on, options) => {
     }
   })
 
+  // Claude Code reports the root as "not a git repository", which is true but
+  // reads as "no git here". This one line says the repos are below it instead.
   on('prompt.section', { name: 'env_info_simple' }, async ($, e, next) => {
     const section = await next(e)
     if (!isActive || section.text === null) return section
@@ -176,7 +179,7 @@ export const register: Register = (on, options) => {
     await update($, reportedAtom, () => fingerprints(repos))
     const note = ['Git changes in the workspace repos since the last status you were given:', ...lines].join('\n')
     return next({ ...e, context: [...(e.context ?? []), note] })
-  })
+  }).catch(($, e, next) => next(e)) // a failed git read never holds up a prompt: it goes as typed
 
   // ------------------------------------------------------------ tools
 
@@ -190,13 +193,13 @@ export const register: Register = (on, options) => {
       return { result: `No repo "${wanted}" in the workspace. Repos: ${names}` }
     }
     return { result: picked.map(describeRepo).join('\n\n') }
-  })
+  }).catch(() => ({ result: 'Could not read the git status of the workspace repos.' }))
 
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)
     if (isActive && REFRESH_AFTER.has(String(e.tool))) scheduleRefresh()
     return ran
-  })
+  }).catch(($, e, next) => next(e)) // the tool call itself always goes ahead untouched
 
   // ------------------------------------------------------------ commands
 
@@ -261,25 +264,36 @@ export const register: Register = (on, options) => {
 
     // Runs one job at a time, shows it in the pane while it runs, and toasts what it did.
     const job = (doing: string, work: (s: Session) => Promise<string>) => async () => {
-      if (!session || (await read($, busyAtom))) return
+      if (!session || isBusy) return
+      isBusy = true
       await update($, busyAtom, () => doing)
       try {
         $.ui.toast(await work(session))
       } catch (error) {
         $.ui.toast(`${doing} failed: ${String(error)}`)
       } finally {
+        isBusy = false
         await update($, busyAtom, () => null)
       }
     }
 
-    // Confirms, removes, then logs each removal to the transcript so there is a record.
-    const removeAll = async (s: Session, found: Linked[], what: string, repair: boolean) => {
+    // Never the worktree this session is working in.
+    const here = (await $.session.cwd()).replace(/\/+$/, '')
+    const isElsewhere = ({ tree }: Linked) => here !== tree.path && !here.startsWith(`${tree.path}/`)
+
+    // Lists each worktree by its full path and asks. Then reads every repo
+    // afresh and removes only those still in the state that was listed, and
+    // notes each removal in the transcript so there is a record.
+    const removeAll = async (s: Session, find: (repos: RepoStatus[]) => Promise<Linked[]>, what: string, repair: boolean) => {
+      const found = (await find(await refresh())).filter(isElsewhere)
       if (found.length === 0) return `No ${what} worktrees to remove`
-      const names = found.map(({ tree }) => worktreeName(tree.path)).join(', ')
-      const question = `Remove ${plural(found.length, `${what} worktree`)} (${names}) and keep their branches?`
+      const listed = found.map(({ repo, tree }) => `${tree.path} (${repo.name})`).join('; ')
+      const question = `${listed}. Remove ${found.length === 1 ? 'this worktree' : `these ${found.length} worktrees`}, keeping their branches? Git keeps any with uncommitted changes; files it ignores, such as build output or .env, go with the folder.`
       const answer = await $.ui.ask(question, ['Remove', 'Cancel']).catch(() => 'Cancel')
       if (answer !== 'Remove') return 'Nothing removed'
-      const { removed, kept } = await removeWorktrees(s, found, repair)
+      const agreed = new Set(found.map(({ tree }) => tree.path))
+      const still = (await find(await refresh())).filter(one => agreed.has(one.tree.path) && isElsewhere(one))
+      const { removed, kept } = await removeWorktrees(s, still, repair)
       await refresh()
       for (const { repo, tree } of removed) $.ui.log(`Removed worktree ${tree.path} (${repo.name})`)
       for (const { worktree, reason } of kept) $.ui.log(`Kept worktree ${worktree.tree.path}: ${reason}`)
@@ -288,7 +302,6 @@ export const register: Register = (on, options) => {
         .join('; ')
     }
 
-    const cwd = await $.session.cwd()
     const buttons = [
       {
         key: 'refresh',
@@ -326,19 +339,14 @@ export const register: Register = (on, options) => {
         hotkey: 'm',
         label: 'Remove merged',
         doing: 'Removing merged worktrees',
-        work: async (s: Session) => {
-          const merged = await mergedWorktrees(s, await read($, reposAtom))
-          // Never the worktree this session is working in.
-          const found = merged.filter(({ tree }) => cwd !== tree.path && !cwd.startsWith(`${tree.path}/`))
-          return removeAll(s, found, 'merged', false)
-        },
+        work: async (s: Session) => removeAll(s, repos => mergedWorktrees(s, repos), 'merged', false),
       },
       {
         key: 'unreadable',
         hotkey: 'u',
         label: 'Remove unreadable',
         doing: 'Removing unreadable worktrees',
-        work: async (s: Session) => removeAll(s, unreadableWorktrees(await read($, reposAtom)), 'unreadable', true),
+        work: async (s: Session) => removeAll(s, async repos => unreadableWorktrees(repos), 'unreadable', true),
       },
     ]
 
