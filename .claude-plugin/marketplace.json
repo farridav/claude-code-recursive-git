@@ -1,0 +1,5 @@
+{
+  "name": "claude-code-recursive-git",
+  "owner": { "name": "farridav" },
+  "plugins": [{ "name": "multi-repo", "source": "./" }]
+}
