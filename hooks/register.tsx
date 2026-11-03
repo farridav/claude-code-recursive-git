@@ -17,7 +17,7 @@ import {
   needsAttention,
   scanAll,
   shortState,
-  statusLine,
+  summaryLine,
   treeRows,
 } from './git'
 
@@ -32,10 +32,8 @@ const STALE_AFTER_MS = 10_000
 // Bump the shape tag when RepoStatus changes: it declines what an older version stored.
 type Session = Io & {
   now: () => Promise<number>
-  cwd: () => Promise<string>
   root: () => Promise<string | null>
   saveRepos: (repos: RepoStatus[]) => Promise<unknown>
-  status: (text: string | undefined) => void
   after: (ms: number, fn: () => void) => Timer
 }
 
@@ -70,7 +68,6 @@ export const register: Register = (on, options) => {
       const repos = await scanAll(s, root, maxDepth, ignore)
       await s.saveRepos(repos)
       lastScanAt = await s.now()
-      s.status(repos.length ? statusLine(repos, await s.cwd()) : undefined)
       return repos
     })().finally(() => {
       scanning = null
@@ -96,10 +93,8 @@ export const register: Register = (on, options) => {
       readFile: path => $.fs.read(path),
       run: (argv, init) => $.process.run(argv, init),
       now: () => $.clock.now(),
-      cwd: () => $.session.cwd(),
       root: () => read($, rootAtom),
       saveRepos: repos => update($, reposAtom, () => repos),
-      status: text => $.ui.status(text),
       after: (ms, fn) => $.clock.after(ms, fn),
     }
     if (!(await read($, rootAtom))) {
@@ -122,6 +117,7 @@ export const register: Register = (on, options) => {
       })
       await $.command.register({ name: 'repos', description: 'Show the git status of every repo in the workspace' })
       await $.command.register({ name: 'repos-fetch', description: 'git fetch --all --prune in every workspace repo' })
+      await $.ui.open({ id: PANE, title: 'Repos' })
       $.clock.every(REFRESH_EVERY_MS, () => void refresh())
     }
     return next(e)
@@ -219,19 +215,20 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (!isActive || !showBand || e.props.hasSurvey) return next(e)
-    const repos = (await read($, reposAtom)).filter(needsAttention)
-    if (repos.length === 0) return next(e)
+    const all = await read($, reposAtom)
+    if (all.length === 0) return next(e)
     const { Box, Text } = $.ui.resolve(e)
-    const chips = repos.map(repo => {
+    // The summary always shows; the repos needing attention follow while they fit.
+    const chips = all.filter(needsAttention).map(repo => {
       const extra = repo.worktrees.length ? ` +${repo.worktrees.length}wt` : ''
       return `${repo.name} ${shortState(repo.tree)}${extra}`
     })
-    let line = ''
+    let line = summaryLine(all, await $.session.cwd())
     let shown = 0
     for (const chip of chips) {
       const more = chips.length - shown - 1
       const room = e.props.bodyColumns - (more > 0 ? ` +${more} more`.length : 0)
-      const joined = line ? `${line}  ${chip}` : chip
+      const joined = `${line}   ${chip}`
       if (joined.length > room) break
       line = joined
       shown++
@@ -240,8 +237,8 @@ export const register: Register = (on, options) => {
     return (
       <Box>
         <Text dimColor wrap="truncate">
-          {line || chips[0]}
-          {rest > 0 && shown > 0 ? ` +${rest} more` : ''}
+          {line}
+          {rest > 0 ? ` +${rest} more` : ''}
         </Text>
       </Box>
     )

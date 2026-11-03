@@ -500,7 +500,8 @@ export function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`
 }
 
-export function statusLine(repos: readonly RepoStatus[], cwd: string): string {
+/** What opens the band: the repo the session is in, then counts across the workspace. */
+export function summaryLine(repos: readonly RepoStatus[], cwd: string): string {
   const trees = repos.flatMap(repo => [repo.tree, ...repo.worktrees])
   const dirty = trees.filter(isDirty).length
   const ahead = trees.filter(tree => tree.ahead > 0).length

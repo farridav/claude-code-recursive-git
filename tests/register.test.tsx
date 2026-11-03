@@ -16,7 +16,12 @@ const TREE: Record<string, FsEntry[]> = {
 const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
 /** Stands in for the engine: the file tree above and a git whose status `dirty` changes. */
-function workspace(on: On, state: { dirty: boolean }, runs: { argv: readonly string[]; env?: Record<string, string> }[] = []) {
+function workspace(
+  on: On,
+  state: { dirty: boolean },
+  runs: { argv: readonly string[]; env?: Record<string, string> }[] = [],
+  opened: string[] = [],
+) {
   const clock = mock.clock(on)
   on('session.root', () => ({ value: '/ws' }))
   on('session.cwd', () => ({ value: '/ws' }))
@@ -39,7 +44,7 @@ function workspace(on: On, state: { dirty: boolean }, runs: { argv: readonly str
   })
   on('tool.register', (_, e) => ({ value: { tool: `mcp__multi-repo__${e.name}` } }))
   on('command.register', (_, e) => ({ value: { command: e.name } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', (_, e) => (opened.push(e.id), { value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   return clock
 }
@@ -78,13 +83,17 @@ describe('register', () => {
     expect(String(one.result)).not.toContain('## api')
   })
 
-  test('the band shows dirty repos and the pane lists every repo with its worktrees', async ($, on) => {
-    workspace(on, { dirty: true })
+  test('the band leads with a summary and the pane, open from the start, lists every repo', async ($, on) => {
+    const opened: string[] = []
+    workspace(on, { dirty: true }, [], opened)
     await $.session.start({ cwd: '/ws', surface: 'terminal', isInteractive: true })
+    expect(opened).toEqual(['multi-repo'])
 
     for (const surface of ['terminal', 'desktop'] as const) {
       const band = await $.ui.mount({ ...BAND, surface })
-      expect((await band.find({ type: 'Text', text: /api/ }))?.text).toContain('api main* +1wt')
+      const text = (await band.find({ type: 'Text', text: /api/ }))?.text
+      expect(text).toStartWith('⎇ 3 repos · 1 worktree · 1 dirty')
+      expect(text).toContain('api main* +1wt')
       expect(await band.find({ type: 'Text', text: /web/ })).toBeUndefined()
       await band.unmount()
 

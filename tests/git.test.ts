@@ -16,7 +16,7 @@ import {
   relativePath,
   resolvePath,
   shortState,
-  statusLine,
+  summaryLine,
   treeRows,
   worktreeName,
 } from '../hooks/git'
@@ -206,7 +206,7 @@ describe('git', () => {
     expect(needsAttention(api)).toBe(false)
     expect(needsAttention(web)).toBe(true)
 
-    expect(statusLine([api], '/ws')).toBe('⎇ 1 repo')
-    expect(statusLine([api, { ...web, worktrees: [behind] }], '/ws')).toBe('⎇ 2 repos · 1 worktree · 1 ahead')
+    expect(summaryLine([api], '/ws')).toBe('⎇ 1 repo')
+    expect(summaryLine([api, { ...web, worktrees: [behind] }], '/ws')).toBe('⎇ 2 repos · 1 worktree · 1 ahead')
   })
 })

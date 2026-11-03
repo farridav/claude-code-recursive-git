@@ -13,13 +13,13 @@ This mod finds every repo under the folder and gives each one that single-repo e
 | A `gitStatus` snapshot in Claude's context (branch, main branch, status, recent commits) | A `multiRepoStatus` snapshot covering **every** repo and its worktrees |
 | Status that keeps up with your work | Each prompt carries the repos that **changed** since Claude last saw them, and only those |
 | Git commands that just work | Guidance in the system prompt: `git -C <repo>`, one commit and PR per repo, parallel work across repos, one worktree per parallel task in the same repo |
-| The branch in the UI | A status line (`▸ api main* · ⎇ 12 repos · 2 worktrees · 3 dirty · 1 ahead`) and a band above the prompt with the repos that have changes, unpushed commits or an unreadable worktree (`api main* ↑2 +1wt`) |
+| The branch in the UI | A band above the prompt that sums up the workspace, then names the repos with changes, unpushed commits or an unreadable worktree (`▸ api main* · ⎇ 12 repos · 2 worktrees · 3 dirty · 1 ahead   web main* ↑2 +1wt`), and the `/repos` pane, open from the start |
 
 ## Commands
 
 ### `/repos`
 
-Opens a pane with every repo drawn as a tree, the way `tree` draws folders. Each repo's linked worktrees hang beneath it, named by their folder less any `<repo>--` prefix. Click a folder in the pane to fold it away (`▸`) or open it again (`▾`). The pane has **Refresh** (`r`) and **Fetch all** (`f`) buttons, and the same tree, without colour or folding, is printed in the transcript.
+Opens the pane, which also opens when the session starts, with every repo drawn as a tree, the way `tree` draws folders. Each repo's linked worktrees hang beneath it, named by their folder less any `<repo>--` prefix. Click a folder in the pane to fold it away (`▸`) or open it again (`▾`). The pane has **Refresh** (`r`) and **Fetch all** (`f`) buttons, and the same tree, without colour or folding, is printed in the transcript.
 
 ```
 ├── data-pipelines/
@@ -64,7 +64,7 @@ Claude calls `repo_status` for fresh status of one repo (`repo: "services/api"`)
 - Each repo's linked worktrees come from `git worktree list`, so worktrees outside the workspace are listed too: `.claude/worktrees/*` made by `EnterWorktree`, `../api-hotfix`, and so on. Each worktree gets its own branch, changes and ahead/behind, and appears once.
 - A folder whose `.git` is a file pointing at `<repo>/.git/worktrees/…` is folded into its main repo. A worktree whose folder has gone is marked prunable. One git can't read (say, its link to the repo is stale) is marked unreadable, and Claude is given git's error.
 - A submodule (its `.git` points into `.git/modules/…`) belongs to its parent repo and is not listed on its own.
-- The status line names the repo or worktree the session is in.
+- The band names the repo or worktree the session is in.
 
 ## Settings
 
@@ -74,7 +74,7 @@ Set these in `/config`, or under `pluginConfigs.multi-repo` in settings:
 | --- | --- | --- |
 | `scanDepth` | `4` | How many folder levels below the root to search |
 | `ignore` | `""` | Extra folder names to skip, comma-separated |
-| `showBand` | `true` | Show the band of repos with changes above the prompt |
+| `showBand` | `true` | Show the band above the prompt: the workspace summary and the repos needing attention |
 
 ## Installation
 
@@ -100,7 +100,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 
 ## Troubleshooting
 
-**Nothing appears: no status line, no `/repos`.** The mod switches itself off when the session's folder is itself a git repo, or when it finds no repos below it. Start Claude Code in the folder that holds your repos.
+**Nothing appears: no band, no `/repos`.** The mod switches itself off when the session's folder is itself a git repo, or when it finds no repos below it. Start Claude Code in the folder that holds your repos.
 
 **A repo is missing.** It may be deeper than `scanDepth` or inside a hidden or ignored folder. Raise `scanDepth`, or move the repo out of the ignored folder.
 
@@ -114,7 +114,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 
 | Event | What the hook does |
 | --- | --- |
-| `session.start` | Fixes the workspace root, scans for repos, and, when it finds some, registers `repo_status`, `/repos` and `/repos-fetch` and starts the 60-second refresh |
+| `session.start` | Fixes the workspace root, scans for repos, and, when it finds some, registers `repo_status`, `/repos` and `/repos-fetch`, opens the `/repos` pane and starts the 60-second refresh |
 | `session.end` | On `/clear`, forgets what Claude was told, so the new conversation gets a fresh snapshot |
 | `prompt.context` | Adds the `multiRepoStatus` block: every repo's branch, main branch, upstream distance, changed files, recent commits and worktrees |
 | `prompt.compose` | Adds the `multi-repo:guidance` section on working across repos and worktrees |
@@ -123,14 +123,14 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | `tool.call` of `repo_status` | Answers with fresh status for one repo or all of them |
 | `tool.call` of `Bash`, `Edit`, `Write`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree` | Refreshes 1.5 seconds after the last such call |
 | `command.run` of `repos`, `repos-fetch` | Opens the pane and prints the table; fetches every repo |
-| `ui.render` of `AbovePrompt` | Draws the band of repos with changes, unpushed commits or an unreadable worktree, or nothing when there are none. Repos only behind their upstream are left to `/repos` |
+| `ui.render` of `AbovePrompt` | Draws the band: the workspace summary, then the repos with changes, unpushed commits or an unreadable worktree. Repos only behind their upstream are left to `/repos` |
 | `ui.render` of the `multi-repo` `Pane` | Draws the repo and worktree list with Refresh and Fetch all |
 
 The system prompt and the first message's context answer the same way for a whole conversation, so the prompt cache holds. Changes reach Claude only as context attached to later prompts.
 
 ## What it calls on `$`
 
-`clock.after`, `clock.every`, `clock.now`, `command.register`, `fs.list`, `fs.read`, `process.run` (git), `session.cwd`, `session.root`, `state.get`, `state.set`, `tool.register`, `ui.open`, `ui.resolve`, `ui.status`, `ui.toast`.
+`clock.after`, `clock.every`, `clock.now`, `command.register`, `fs.list`, `fs.read`, `process.run` (git), `session.cwd`, `session.root`, `state.get`, `state.set`, `tool.register`, `ui.open`, `ui.resolve`, `ui.toast`.
 
 ## Git commands it runs
 
