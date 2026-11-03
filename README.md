@@ -19,7 +19,25 @@ This mod finds every repo under the folder and gives each one that single-repo e
 
 ### `/repos`
 
-Opens a pane listing every repo with its branch, distance from upstream, changes and last commit. Each repo's linked worktrees are indented beneath it, by folder name. The pane has **Refresh** (`r`) and **Fetch all** (`f`) buttons. The same table is printed in the transcript.
+Opens a pane with every repo drawn as a tree, the way `tree` draws folders. Each repo's linked worktrees hang beneath it, named by their folder less any `<repo>--` prefix. The pane has **Refresh** (`r`) and **Fetch all** (`f`) buttons, and the same tree, without colour, is printed in the transcript.
+
+```
+├── data-pipelines/
+│   ├── demand-pipeline ✓ ⎇ main
+│   │   └── resolve-promo-anti-join ✓ ⎇ fix/resolve-promo-anti-join
+│   └── feature-pipeline +2 ~1 ↑3 ⎇ fix/IFP-4937-assertion-latch
+│       └── xjp ✗ unreadable
+└── services/
+    └── ironfe-status ↓2 ⎇ main
+```
+
+| Marker | Meaning |
+| --- | --- |
+| `✓` | Clean and level with its upstream |
+| `+2` `~1` `?1` `!1` | Staged, modified, untracked and conflicted files |
+| `↑3` `↓2` | Commits ahead of and behind its upstream |
+| `⎇ main` | The branch, or `⎇ @abc1234` when detached |
+| `✗ missing` `✗ unreadable` | A worktree whose folder has gone, or that git can't read |
 
 ### `/repos-fetch`
 

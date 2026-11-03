@@ -55,9 +55,14 @@ export function relativePath(from: string, to: string): string {
   return [...up, ...b.slice(shared)].join('/') || '.'
 }
 
-/** The last segment of a path: how a worktree is named in the table, pane and band. */
-export function baseName(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1)
+/**
+ * A worktree's folder name, less the `<repo>--` it is usually made with:
+ * `on-demand-forecasting--odfe-skip` is shown as `odfe-skip`.
+ */
+export function worktreeName(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const cut = name.indexOf('--')
+  return cut > 0 && cut + 2 < name.length ? name.slice(cut + 2) : name
 }
 
 // ---------------------------------------------------------------- discovery
@@ -379,18 +384,100 @@ export function formatChanges(before: Record<string, string>, repos: readonly Re
   return lines
 }
 
+/** A piece of a row in the pane and table: its text and the theme colour the pane draws it in. */
+export type Mark = { text: string; color: string }
+
+/**
+ * A tree's state as short markers, each with its own symbol so it reads
+ * without colour: `!` conflicted, `+` staged, `~` modified, `?` untracked,
+ * `↑`/`↓` ahead/behind, `✓` clean and in step. The branch comes last, so a
+ * narrow pane cuts it before the markers.
+ */
+export function marks(tree: TreeStatus, defaultBranch: string | null): Mark[] {
+  if (tree.isPrunable) return [{ text: '✗ missing', color: 'error' }]
+  if (tree.error) return [{ text: '✗ unreadable', color: 'error' }]
+  const out: Mark[] = []
+  if (tree.conflicted) out.push({ text: `!${tree.conflicted}`, color: 'error' })
+  if (tree.staged) out.push({ text: `+${tree.staged}`, color: 'success' })
+  if (tree.unstaged) out.push({ text: `~${tree.unstaged}`, color: 'warning' })
+  if (tree.untracked) out.push({ text: `?${tree.untracked}`, color: 'warning' })
+  if (tree.ahead) out.push({ text: `↑${tree.ahead}`, color: 'suggestion' })
+  if (tree.behind) out.push({ text: `↓${tree.behind}`, color: 'inactive' })
+  if (out.length === 0) out.push({ text: '✓', color: 'success' })
+  const isDefault = tree.branch !== null && tree.branch === defaultBranch
+  out.push({ text: `⎇ ${tree.branch ?? `@${tree.head ?? '?'}`}`, color: isDefault ? 'inactive' : 'merged' })
+  return out
+}
+
+/** A line of the repo tree: a folder, a repo or one of its worktrees, after `tree`'s connectors. */
+export type TreeRow = {
+  prefix: string
+  kind: 'folder' | 'repo' | 'worktree'
+  name: string
+  tree: TreeStatus | null
+  defaultBranch: string | null
+}
+
+type TreeNode = { children: Map<string, TreeNode>; repo: RepoStatus | null }
+
+/**
+ * The repos as `tree` draws folders: each folder once, its repos beneath it,
+ * and each repo's worktrees beneath the repo. A chain of folders holding only
+ * one folder each is drawn on one line (`group/a/b/`).
+ */
+export function treeRows(repos: readonly RepoStatus[]): TreeRow[] {
+  const top: TreeNode = { children: new Map(), repo: null }
+  for (const repo of repos) {
+    let node = top
+    for (const part of repo.name.split('/')) {
+      let child = node.children.get(part)
+      if (!child) node.children.set(part, (child = { children: new Map(), repo: null }))
+      node = child
+    }
+    node.repo = repo
+  }
+
+  const rows: TreeRow[] = []
+  function walk(node: TreeNode, prefix: string): void {
+    const entries = [...node.children]
+    entries.forEach(([part, child], index) => {
+      const isLast = index === entries.length - 1
+      const branch = prefix + (isLast ? '└── ' : '├── ')
+      const below = prefix + (isLast ? '    ' : '│   ')
+      const repo = child.repo
+      if (repo) {
+        rows.push({ prefix: branch, kind: 'repo', name: part, tree: repo.tree, defaultBranch: repo.defaultBranch })
+        repo.worktrees.forEach((tree, at) => {
+          const connector = at === repo.worktrees.length - 1 ? '└── ' : '├── '
+          const name = worktreeName(tree.path)
+          rows.push({ prefix: below + connector, kind: 'worktree', name, tree, defaultBranch: repo.defaultBranch })
+        })
+        return
+      }
+      let name = part
+      let folder = child
+      while (folder.children.size === 1) {
+        const [only] = folder.children
+        if (!only || only[1].repo) break
+        name += `/${only[0]}`
+        folder = only[1]
+      }
+      rows.push({ prefix: branch, kind: 'folder', name: `${name}/`, tree: null, defaultBranch: null })
+      walk(folder, below)
+    })
+  }
+  walk(top, '')
+  return rows
+}
+
+/** The repo tree as plain text, for the transcript. */
 export function formatTable(repos: readonly RepoStatus[]): string {
   if (repos.length === 0) return 'No git repos found under the workspace root.'
-  const rows: string[][] = []
-  for (const repo of repos) {
-    rows.push([repo.name, shortState(repo.tree), changeSummary(repo.tree), repo.recent[0] ?? ''])
-    for (const tree of repo.worktrees) {
-      rows.push([`  └ ${baseName(tree.path)}`, shortState(tree), changeSummary(tree), ''])
-    }
-  }
-  const widths = [0, 1, 2].map(column => Math.max(...rows.map(row => (row[column] ?? '').length)))
-  return rows
-    .map(row => row.map((cell, column) => (column < 3 ? cell.padEnd(widths[column] ?? 0) : cell)).join('  ').trimEnd())
+  return treeRows(repos)
+    .map(row => {
+      const state = row.tree ? marks(row.tree, row.defaultBranch).map(mark => mark.text) : []
+      return [row.prefix + row.name, ...state].join(' ')
+    })
     .join('\n')
 }
 

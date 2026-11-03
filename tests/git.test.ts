@@ -3,9 +3,9 @@ import type { FsEntry } from 'claude-code'
 
 import type { Io } from '../hooks/git'
 import {
-  baseName,
   classifyGitFile,
   describeRepo,
+  emptyTree,
   findRepos,
   fingerprints,
   formatChanges,
@@ -17,6 +17,7 @@ import {
   resolvePath,
   shortState,
   statusLine,
+  worktreeName,
 } from '../hooks/git'
 
 const STATUS = [
@@ -88,7 +89,10 @@ describe('git', () => {
     expect(resolvePath('/ws/a/b', '../../c/./d')).toBe('/ws/c/d')
     expect(relativePath('/ws', '/ws/services/api')).toBe('services/api')
     expect(relativePath('/ws', '/elsewhere/api')).toBe('../elsewhere/api')
-    expect(baseName('/home/me/.cursor/worktrees/api/xjp')).toBe('xjp')
+    expect(worktreeName('/ws/.worktrees/on-demand-forecasting--odfe-deterministic-skip')).toBe('odfe-deterministic-skip')
+    expect(worktreeName('/ws/.worktrees/ironfe-model--IFP-4511-subdept')).toBe('IFP-4511-subdept')
+    expect(worktreeName('/tmp/odfe_unchunk')).toBe('odfe_unchunk')
+    expect(worktreeName('/tmp/trailing--')).toBe('trailing--')
   })
 
   /** An in-memory file tree: a path ending in `/` is a folder, `.git/` a repo. */
@@ -158,16 +162,26 @@ describe('git', () => {
     expect(formatChanges(before, [repo])).toEqual(['- /ws/web: no longer present'])
   })
 
-  test('worktrees go by their folder name, and an unreadable one by a short state', () => {
+  test('formatTable draws the repos as a tree, with markers before the branch', () => {
     const clean = parseStatus('/ws/api', '# branch.oid aaaaaaa\n# branch.head main\n')
-    const broken = { ...parseStatus('/elsewhere/xjp', ''), error: 'fatal: not a git repository: /old/.git/worktrees/xjp' }
-    const fix = parseStatus('/ws/api/.worktrees/api--fix', '# branch.oid bbbbbbb\n# branch.head fix\n')
-    const repo = { name: 'api', path: '/ws/api', defaultBranch: 'main', recent: [], tree: clean, worktrees: [fix, broken] }
+    const fix = { ...clean, path: '/ws/api/.worktrees/api--fix', branch: 'fix' }
+    const broken = { ...emptyTree('/elsewhere/xjp'), error: 'fatal: not a git repository: /old/.git/worktrees/xjp' }
+    const api = { name: 'api', path: '/ws/api', defaultBranch: 'main', recent: [], tree: clean, worktrees: [fix, broken] }
+    const deep = { ...api, name: 'group/a/b/deep', tree: { ...clean, branch: 'feature', staged: 1, untracked: 1, ahead: 2 }, worktrees: [] }
+    const web = { ...api, name: 'services/web', tree: { ...clean, behind: 3 }, worktrees: [] }
+    const worker = { ...api, name: 'services/worker', worktrees: [] }
 
-    const [, fixRow, brokenRow] = formatTable([repo]).split('\n')
-    expect(fixRow).toMatch(/^  └ api--fix +fix +clean$/)
-    expect(brokenRow).toMatch(/^  └ xjp +unreadable$/)
-    expect(describeRepo(repo)).toContain('Error: fatal: not a git repository: /old/.git/worktrees/xjp')
+    expect(formatTable([api, deep, web, worker]).split('\n')).toEqual([
+      '├── api ✓ ⎇ main',
+      '│   ├── fix ✓ ⎇ fix',
+      '│   └── xjp ✗ unreadable',
+      '├── group/a/b/',
+      '│   └── deep +1 ?1 ↑2 ⎇ feature',
+      '└── services/',
+      '    ├── web ↓3 ⎇ main',
+      '    └── worker ✓ ⎇ main',
+    ])
+    expect(describeRepo(api)).toContain('Error: fatal: not a git repository: /old/.git/worktrees/xjp')
   })
 
   test('the band skips repos that are only behind; the status line counts in words', () => {

@@ -6,18 +6,18 @@ import type { Io } from './git'
 import {
   DEFAULT_IGNORE,
   GUIDANCE,
-  baseName,
-  changeSummary,
   describeRepo,
   fetchAll,
   fingerprints,
   formatChanges,
   formatSnapshot,
   formatTable,
+  marks,
   needsAttention,
   scanAll,
   shortState,
   statusLine,
+  treeRows,
 } from './git'
 
 const PANE = 'multi-repo'
@@ -268,18 +268,19 @@ export const register: Register = (on, options) => {
           {repos.length} repos under {root}
         </Text>
         {repos.length === 0 && <Text dimColor>No git repos found.</Text>}
-        {repos.map(repo => (
-          <Box flexDirection="column">
-            <Text wrap="truncate">
-              <Text bold>{repo.name}</Text> {shortState(repo.tree)} <Text dimColor>{changeSummary(repo.tree)}</Text>
+        {treeRows(repos).map(row => (
+          <Text wrap="truncate">
+            <Text dimColor>{row.prefix}</Text>
+            <Text
+              bold={row.kind !== 'worktree'}
+              italic={row.kind === 'worktree'}
+              color={row.kind === 'folder' ? 'suggestion' : undefined}
+            >
+              {row.name}
             </Text>
-            {repo.worktrees.map(tree => (
-              <Text wrap="truncate" dimColor={!needsAttention({ ...repo, tree, worktrees: [] })}>
-                {'  └ '}
-                {baseName(tree.path)} {shortState(tree)} {changeSummary(tree)}
-              </Text>
-            ))}
-          </Box>
+            {row.tree &&
+              marks(row.tree, row.defaultBranch).map(mark => <Text color={mark.color}>{` ${mark.text}`}</Text>)}
+          </Text>
         ))}
       </Box>
     )
