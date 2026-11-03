@@ -352,7 +352,7 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        <Box flexWrap="wrap" columnGap={1}>
+        <Box flexWrap="wrap" columnGap="sm" rowGap="xs">
           {buttons.map(button => (
             <Button
               key={button.key}
@@ -376,9 +376,11 @@ export const register: Register = (on, options) => {
         {treeRows(repos, new Set(folded)).map(row =>
           row.kind === 'folder' ? (
             <Box>
-              <Text dimColor>{row.prefix}</Text>
+              <Text dimColor mono>
+                {row.prefix}
+              </Text>
               <Button plain key={`fold:${row.path}`} label={row.name} onPress={() => void toggle(row.path)}>
-                <Text bold color="suggestion">
+                <Text bold color="suggestion" mono>
                   {row.foldedRepos ? '▸ ' : '▾ '}
                   {row.name}
                 </Text>
@@ -386,7 +388,7 @@ export const register: Register = (on, options) => {
               </Button>
             </Box>
           ) : (
-            <Text wrap="truncate">
+            <Text wrap="truncate" mono>
               <Text dimColor>{row.prefix}</Text>
               <Text bold={row.kind === 'repo'} italic={row.kind === 'worktree'}>
                 {row.name}

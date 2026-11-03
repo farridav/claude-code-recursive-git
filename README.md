@@ -2,6 +2,8 @@
 
 Git awareness for Claude Code sessions started in a folder that **holds** many git repos, for people who work across them in parallel.
 
+![The /repos pane docked beside a Claude Code session in the terminal](docs/images/terminal.jpg)
+
 ## Overview
 
 When you start Claude Code inside one repo, Claude knows its branch, main branch, status and recent commits. When you start it in a folder of repos, Claude Code sees "not a git repository": no branch in the UI, no git status for Claude, and no hint of how the folder is laid out.
@@ -14,6 +16,13 @@ This mod finds every repo under the folder and gives each one that single-repo e
 | Status that keeps up with your work | Each prompt carries the repos that **changed** since Claude last saw them, and only those |
 | Git commands that just work | Guidance in the system prompt: `git -C <repo>`, one commit and PR per repo, parallel work across repos, one worktree per parallel task in the same repo |
 | The branch in the UI | A band above the prompt that sums up the workspace, then names the repos with changes, unpushed commits or an unreadable worktree (`▸ api main* · ⎇ 12 repos · 2 worktrees · 3 dirty · 1 ahead   web main* ↑2 +1wt`), and the `/repos` pane, open from the start |
+
+In Claude Code Desktop the pane sits beside the conversation, and Claude answers from the snapshot without running git:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/desktop-dark.jpg">
+  <img alt="The /repos pane in Claude Code Desktop, with Claude summarising the workspace" src="docs/images/desktop-light.jpg">
+</picture>
 
 ## Commands
 
