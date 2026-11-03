@@ -13,13 +13,60 @@ This mod finds every repo under the folder and gives each one that single-repo e
 | A `gitStatus` snapshot in Claude's context (branch, main branch, status, recent commits) | A `multiRepoStatus` snapshot covering **every** repo and its worktrees |
 | Status that keeps up with your work | Each prompt carries the repos that **changed** since Claude last saw them, and only those |
 | Git commands that just work | Guidance in the system prompt: `git -C <repo>`, one commit and PR per repo, parallel work across repos, one worktree per parallel task in the same repo |
-| The branch in the UI | A status line (`▸ api main* · ⎇ 12 repos · 2 worktrees · 3 dirty · 1 ahead`) and a band above the prompt with the repos that need attention (`api main* ↑2 +1wt`) |
+| The branch in the UI | A band above the prompt that sums up the workspace, then names the repos with changes, unpushed commits or an unreadable worktree (`▸ api main* · ⎇ 12 repos · 2 worktrees · 3 dirty · 1 ahead   web main* ↑2 +1wt`), and the `/repos` pane, open from the start |
 
 ## Commands
 
 ### `/repos`
 
-Opens a pane listing every repo with its branch, distance from upstream, changes and last commit. Each repo's linked worktrees are indented beneath it. The pane has **Refresh** (`r`) and **Fetch all** (`f`) buttons. The same table is printed in the transcript.
+Opens the pane, which also opens when the session starts, with every repo drawn as a tree, the way `tree` draws folders. Each repo's linked worktrees hang beneath it, named by their folder less any `<repo>--` prefix. Click a folder in the pane to fold it away (`▸`) or open it again (`▾`). The same tree, without colour or folding, is printed in the transcript.
+
+```
+├── apps/
+│   ├── admin ✓ ⎇ main
+│   └── storefront ~1 ?1 ↑1 ⎇ feat/checkout-redesign
+├── infra/
+│   └── terraform ✓ ⎇ main
+│       └── staging-db ✓ ⎇ feat/staging-db
+└── services/
+    ├── orders ✓ ⎇ main
+    │   ├── fix-refund-rounding ~1 ⎇ fix/refund-rounding
+    │   ├── retry-webhooks ✓ ⎇ feat/retry-webhooks
+    │   └── spike-queue ✗ missing
+    ├── payments ↓3 ⎇ main
+    └── search ↑1 ⎇ main
+```
+
+| Marker | Meaning |
+| --- | --- |
+| `✓` | Clean and level with its upstream |
+| `+2` `~1` `?1` `!1` | Staged, modified, untracked and conflicted files |
+| `↑3` `↓2` | Commits ahead of and behind its upstream |
+| `⎇ main` | The branch, or `⎇ @abc1234` when detached |
+| `✗ missing` `✗ unreadable` | A worktree whose folder has gone, or that git can't read |
+
+The pane's buttons run one job at a time. While one runs the pane says so, and when it ends a toast says what it did.
+
+| Button | What it does |
+| --- | --- |
+| **Refresh** (`r`) | Reads every repo's status now |
+| **Fetch all** (`f`) | `git fetch --all --prune` in every repo, as `/repos-fetch` does |
+| **Prune missing** (`p`) | Clears git's records of worktrees whose folder has already gone (`✗ missing`), with `git worktree prune`. No files are deleted |
+| **Remove merged** (`m`) | Offers to remove worktrees whose work is done: clean, nothing unpushed, and the branch already in the main branch |
+| **Remove unreadable** (`u`) | Offers to remove worktrees git can't read (`✗ unreadable`), usually because their repo has moved since they were made |
+
+#### What the remove buttons do, and don't
+
+Removing a worktree deletes its folder, so both remove buttons go carefully:
+
+- Nothing goes without asking. The question lists each worktree's full path and its repo. Cancel, or closing the dialog, removes nothing.
+- Once you answer, every repo is read again, and only worktrees still in the state you were shown are removed.
+- `git worktree remove` does the removing, never with `--force`, so git refuses any worktree with modified or untracked files and leaves it be. Files git ignores, such as build output or a `.env`, go with the folder, and the question says so.
+- Branches and commits stay in the repo. Only the checkout goes, and `git worktree add` brings it back.
+- The worktree the session is working in is never offered.
+- Each removal, and each worktree git kept, is noted in the transcript.
+
+Remove merged counts a branch as merged when its tip is in the main branch, locally or on `origin`. A branch still at the main branch's tip counts as new, and squash merges aren't spotted, so both are left alone. Remove unreadable first runs `git worktree repair`, which only rewrites git's link between the worktree and its repo, so git can check the worktree for changes. Worktrees can live outside the workspace (`~/.cursor/worktrees/…`), and the buttons act on the paths git lists for each repo, wherever they are.
 
 ### `/repos-fetch`
 
@@ -36,6 +83,7 @@ Claude calls `repo_status` for fresh status of one repo (`repo: "services/api"`)
 - It never looks inside a repo it has found. Dependency checkouts inside your repos are never picked up: `node_modules`, `.terraform`, vendored Ansible roles, packages that ship a whole git repo.
 - Between the root and your repos, it skips:
   - hidden folders (`.terraform`, `.venv`, `.ansible`, `.cache`, …)
+  - folders starting with `_`, such as `_archive`
   - `node_modules, vendor, venv, site-packages, bower_components, Pods, target, dist, build, galaxy_roles, collections`
   - any names you add with `ignore`
 - If the starting folder is itself a repo, the mod does nothing: Claude Code's own git support covers that case.
@@ -43,9 +91,9 @@ Claude calls `repo_status` for fresh status of one repo (`repo: "services/api"`)
 ## Worktrees
 
 - Each repo's linked worktrees come from `git worktree list`, so worktrees outside the workspace are listed too: `.claude/worktrees/*` made by `EnterWorktree`, `../api-hotfix`, and so on. Each worktree gets its own branch, changes and ahead/behind, and appears once.
-- A folder whose `.git` is a file pointing at `<repo>/.git/worktrees/…` is folded into its main repo. A worktree whose folder has gone is marked prunable.
+- A folder whose `.git` is a file pointing at `<repo>/.git/worktrees/…` is folded into its main repo. A worktree whose folder has gone is marked prunable. One git can't read (say, its link to the repo is stale) is marked unreadable, and Claude is given git's error.
 - A submodule (its `.git` points into `.git/modules/…`) belongs to its parent repo and is not listed on its own.
-- The status line names the repo or worktree the session is in.
+- The band names the repo or worktree the session is in.
 
 ## Settings
 
@@ -55,7 +103,7 @@ Set these in `/config`, or under `pluginConfigs.multi-repo` in settings:
 | --- | --- | --- |
 | `scanDepth` | `4` | How many folder levels below the root to search |
 | `ignore` | `""` | Extra folder names to skip, comma-separated |
-| `showBand` | `true` | Show the band of repos with changes above the prompt |
+| `showBand` | `true` | Show the band above the prompt: the workspace summary and the repos needing attention |
 
 ## Installation
 
@@ -81,7 +129,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 
 ## Troubleshooting
 
-**Nothing appears: no status line, no `/repos`.** The mod switches itself off when the session's folder is itself a git repo, or when it finds no repos below it. Start Claude Code in the folder that holds your repos.
+**Nothing appears: no band, no `/repos`.** The mod switches itself off when the session's folder is itself a git repo, or when it finds no repos below it. Start Claude Code in the folder that holds your repos.
 
 **A repo is missing.** It may be deeper than `scanDepth` or inside a hidden or ignored folder. Raise `scanDepth`, or move the repo out of the ignored folder.
 
@@ -95,7 +143,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 
 | Event | What the hook does |
 | --- | --- |
-| `session.start` | Fixes the workspace root, scans for repos, and, when it finds some, registers `repo_status`, `/repos` and `/repos-fetch` and starts the 60-second refresh |
+| `session.start` | Fixes the workspace root, scans for repos, and, when it finds some, registers `repo_status`, `/repos` and `/repos-fetch`, opens the `/repos` pane and starts the 60-second refresh |
 | `session.end` | On `/clear`, forgets what Claude was told, so the new conversation gets a fresh snapshot |
 | `prompt.context` | Adds the `multiRepoStatus` block: every repo's branch, main branch, upstream distance, changed files, recent commits and worktrees |
 | `prompt.compose` | Adds the `multi-repo:guidance` section on working across repos and worktrees |
@@ -104,14 +152,14 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | `tool.call` of `repo_status` | Answers with fresh status for one repo or all of them |
 | `tool.call` of `Bash`, `Edit`, `Write`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree` | Refreshes 1.5 seconds after the last such call |
 | `command.run` of `repos`, `repos-fetch` | Opens the pane and prints the table; fetches every repo |
-| `ui.render` of `AbovePrompt` | Draws the band of repos needing attention, or nothing when all are clean |
+| `ui.render` of `AbovePrompt` | Draws the band: the workspace summary, then the repos with changes, unpushed commits or an unreadable worktree. Repos only behind their upstream are left to `/repos` |
 | `ui.render` of the `multi-repo` `Pane` | Draws the repo and worktree list with Refresh and Fetch all |
 
 The system prompt and the first message's context answer the same way for a whole conversation, so the prompt cache holds. Changes reach Claude only as context attached to later prompts.
 
 ## What it calls on `$`
 
-`clock.after`, `clock.every`, `clock.now`, `command.register`, `fs.list`, `fs.read`, `process.run` (git), `session.cwd`, `session.root`, `state.get`, `state.set`, `tool.register`, `ui.open`, `ui.resolve`, `ui.status`, `ui.toast`.
+`clock.after`, `clock.every`, `clock.now`, `command.register`, `fs.list`, `fs.read`, `process.run` (git), `session.cwd`, `session.root`, `state.get`, `state.set`, `tool.register`, `ui.ask`, `ui.log`, `ui.open`, `ui.resolve`, `ui.toast`.
 
 ## Git commands it runs
 
@@ -124,8 +172,12 @@ Each runs as `git --no-optional-locks -C <repo> …`, in the C locale, with `GIT
 | `log -5 --format=%h %s` | Every refresh, for each repo |
 | `symbolic-ref --short refs/remotes/origin/HEAD`, then `rev-parse --verify --quiet refs/heads/main` or `master` | Every refresh, to name the main branch |
 | `fetch --all --prune --quiet` | Only from `/repos-fetch` or the pane's Fetch all |
+| `worktree prune` | Only from the pane's Prune missing |
+| `rev-parse --verify --quiet`, `merge-base --is-ancestor` | Only from the pane's Remove merged, to find merged branches |
+| `worktree repair -- <path>` | Only from the pane's Remove unreadable, after you confirm |
+| `worktree remove -- <path>` | Only from the pane's Remove merged and Remove unreadable, after you confirm |
 
-Everything but the fetch is read-only.
+Everything else only reads. The fetch is the only command that uses the network, and it runs only when you ask for it.
 
 ## Developing
 

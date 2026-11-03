@@ -55,6 +55,16 @@ export function relativePath(from: string, to: string): string {
   return [...up, ...b.slice(shared)].join('/') || '.'
 }
 
+/**
+ * A worktree's folder name, less the `<repo>--` it is usually made with:
+ * `orders--fix-refund-rounding` is shown as `fix-refund-rounding`.
+ */
+export function worktreeName(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const cut = name.indexOf('--')
+  return cut > 0 && cut + 2 < name.length ? name.slice(cut + 2) : name
+}
+
 // ---------------------------------------------------------------- discovery
 
 /**
@@ -75,8 +85,9 @@ export function classifyGitFile(dir: string, text: string): { kind: 'worktree'; 
 
 /**
  * Finds the git repos under `root`, at most `maxDepth` folders down. It never
- * looks inside a repo, nor into dot-folders or the `ignore` names, so
- * dependency checkouts (node_modules, .terraform, vendored roles) stay out.
+ * looks inside a repo, nor into dot-folders, `_` folders or the `ignore` names,
+ * so dependency checkouts (node_modules, .terraform, vendored roles) and
+ * parked work (`_archive`) stay out.
  */
 export async function findRepos(io: Io, root: string, maxDepth: number, ignore: ReadonlySet<string>): Promise<string[]> {
   const found = new Set<string>()
@@ -96,7 +107,7 @@ export async function findRepos(io: Io, root: string, maxDepth: number, ignore: 
     }
     if (depth >= maxDepth) return
     const children = entries.filter(
-      entry => entry.kind === 'dir' && !entry.name.startsWith('.') && !ignore.has(entry.name),
+      entry => entry.kind === 'dir' && !/^[._]/.test(entry.name) && !ignore.has(entry.name),
     )
     await Promise.all(children.map(child => walk(joinPath(dir, child.name), depth + 1)))
   }
@@ -269,22 +280,108 @@ export async function fetchAll(io: Io, repos: readonly RepoStatus[]): Promise<st
   return failed.filter((name): name is string => name !== null)
 }
 
+// ---------------------------------------------------------------- worktree upkeep
+
+/** A linked worktree and the repo it belongs to. */
+export type Linked = { repo: RepoStatus; tree: TreeStatus }
+
+/** `git worktree prune` in every repo with a missing worktree. Returns how many it forgot and where it failed. */
+export async function pruneMissing(io: Io, repos: readonly RepoStatus[]): Promise<{ pruned: number; failed: string[] }> {
+  const withMissing = repos.filter(repo => repo.worktrees.some(tree => tree.isPrunable))
+  const results = await mapLimit(withMissing, CONCURRENCY, async repo => ({
+    repo,
+    isOk: (await git(io, repo.path, ['worktree', 'prune'])).exitCode === 0,
+  }))
+  const pruned = results
+    .filter(result => result.isOk)
+    .reduce((sum, result) => sum + result.repo.worktrees.filter(tree => tree.isPrunable).length, 0)
+  return { pruned, failed: results.filter(result => !result.isOk).map(result => result.repo.name) }
+}
+
+/**
+ * Worktrees whose work is done: clean, nothing unpushed, and the branch's
+ * tip already in the main branch, locally or on origin. A branch still at
+ * the main branch's tip is left alone: it is more likely new than merged.
+ * Squash merges leave the tip out of main, so those are not found.
+ */
+export async function mergedWorktrees(io: Io, repos: readonly RepoStatus[]): Promise<Linked[]> {
+  const candidates = repos.flatMap(repo =>
+    repo.worktrees
+      .filter(
+        tree =>
+          tree.branch !== null &&
+          repo.defaultBranch !== null &&
+          tree.branch !== repo.defaultBranch &&
+          tree.error === null &&
+          !tree.isPrunable &&
+          !isDirty(tree) &&
+          tree.ahead === 0,
+      )
+      .map(tree => ({ repo, tree })),
+  )
+  const isMerged = await mapLimit(candidates, CONCURRENCY, async ({ repo, tree }) => {
+    const bases = [`refs/heads/${repo.defaultBranch}`, `refs/remotes/origin/${repo.defaultBranch}`]
+    const branchTip = await git(io, repo.path, ['rev-parse', '--verify', '--quiet', `refs/heads/${tree.branch}`])
+    if (branchTip.exitCode !== 0) return false
+    for (const base of bases) {
+      const baseTip = await git(io, repo.path, ['rev-parse', '--verify', '--quiet', base])
+      if (baseTip.exitCode !== 0 || baseTip.stdout.trim() === branchTip.stdout.trim()) continue
+      const ran = await git(io, repo.path, ['merge-base', '--is-ancestor', `refs/heads/${tree.branch}`, base])
+      if (ran.exitCode === 0) return true
+    }
+    return false
+  })
+  return candidates.filter((_, index) => isMerged[index])
+}
+
+export function unreadableWorktrees(repos: readonly RepoStatus[]): Linked[] {
+  return repos.flatMap(repo => repo.worktrees.filter(tree => tree.error !== null).map(tree => ({ repo, tree })))
+}
+
+/**
+ * Removes each worktree with `git worktree remove`, never `--force`: git
+ * refuses any with modified or untracked files, and keeps it. Files git
+ * ignores (build output, `.env`) go with the folder. Branches and commits
+ * stay in the repo. `repair` first points a worktree whose link to its repo
+ * is stale (the repo moved) back at the repo, so git can check it for changes.
+ */
+export async function removeWorktrees(
+  io: Io,
+  worktrees: readonly Linked[],
+  repair: boolean,
+): Promise<{ removed: Linked[]; kept: { worktree: Linked; reason: string }[] }> {
+  const removed: Linked[] = []
+  const kept: { worktree: Linked; reason: string }[] = []
+  // One at a time: two removals in the same repo would race for its lock.
+  for (const worktree of worktrees) {
+    const { repo, tree } = worktree
+    if (repair) await git(io, repo.path, ['worktree', 'repair', '--', tree.path])
+    const ran = await git(io, repo.path, ['worktree', 'remove', '--', tree.path])
+    if (ran.exitCode === 0) removed.push(worktree)
+    else {
+      const message = ran.stderr.trim().split('\n')[0] ?? ''
+      const reason = /modified or untracked/.test(message) ? 'has uncommitted changes' : message || 'git refused'
+      kept.push({ worktree, reason })
+    }
+  }
+  return { removed, kept }
+}
+
 // ---------------------------------------------------------------- text
 
 export function isDirty(tree: TreeStatus): boolean {
   return tree.staged + tree.unstaged + tree.untracked + tree.conflicted > 0
 }
 
+/** Changed, ahead or unreadable. A repo that is only behind its upstream waits for /repos. */
 export function needsAttention(repo: RepoStatus): boolean {
-  return [repo.tree, ...repo.worktrees].some(
-    tree => isDirty(tree) || tree.ahead > 0 || tree.behind > 0 || tree.error !== null,
-  )
+  return [repo.tree, ...repo.worktrees].some(tree => isDirty(tree) || tree.ahead > 0 || tree.error !== null)
 }
 
 /** `main* ↑2 ↓1`: the branch, a star when dirty, and the distance to upstream. */
 export function shortState(tree: TreeStatus): string {
   if (tree.isPrunable) return 'missing (prunable)'
-  if (tree.error) return `error: ${tree.error}`
+  if (tree.error) return 'unreadable'
   const branch = tree.branch ?? `detached@${tree.head ?? '?'}`
   const parts = [branch + (isDirty(tree) ? '*' : '')]
   if (tree.ahead) parts.push(`↑${tree.ahead}`)
@@ -292,7 +389,9 @@ export function shortState(tree: TreeStatus): string {
   return parts.join(' ')
 }
 
+/** Nothing for a tree git couldn't read: its counts are empty, not clean. */
 export function changeSummary(tree: TreeStatus): string {
+  if (tree.error || tree.isPrunable) return ''
   const parts: string[] = []
   if (tree.conflicted) parts.push(`${tree.conflicted} conflicted`)
   if (tree.staged) parts.push(`${tree.staged} staged`)
@@ -305,6 +404,7 @@ function describeTree(tree: TreeStatus, indent: string): string[] {
   const lines: string[] = []
   const upstream = tree.upstream ? ` (tracking ${tree.upstream})` : ' (no upstream)'
   lines.push(`${indent}Branch: ${shortState(tree)}${tree.error || tree.isPrunable ? '' : upstream}`)
+  if (tree.error) lines.push(`${indent}Error: ${tree.error}`)
   if (tree.error || tree.isPrunable) return lines
   lines.push(`${indent}Status: ${changeSummary(tree)}`)
   for (const file of tree.files) lines.push(`${indent}  ${file}`)
@@ -361,7 +461,8 @@ export function formatChanges(before: Record<string, string>, repos: readonly Re
       const label = tree === repo.tree ? repo.name : `${repo.name} worktree ${tree.path}`
       const isNew = before[tree.path] === undefined ? ' (new)' : ''
       const files = tree.files.slice(0, 5).join(', ')
-      lines.push(`- ${label}${isNew}: ${shortState(tree)}, ${changeSummary(tree)}${files ? ` (${files})` : ''}`)
+      const state = [shortState(tree), changeSummary(tree)].filter(Boolean).join(', ')
+      lines.push(`- ${label}${isNew}: ${state}${files ? ` (${files})` : ''}`)
     }
   }
   for (const path of Object.keys(before)) {
@@ -370,28 +471,130 @@ export function formatChanges(before: Record<string, string>, repos: readonly Re
   return lines
 }
 
-export function formatTable(root: string, repos: readonly RepoStatus[]): string {
-  if (repos.length === 0) return 'No git repos found under the workspace root.'
-  const rows: string[][] = []
+/** A piece of a row in the pane and table: its text and the theme colour the pane draws it in. */
+export type Mark = { text: string; color: string }
+
+/**
+ * A tree's state as short markers, each with its own symbol so it reads
+ * without colour: `!` conflicted, `+` staged, `~` modified, `?` untracked,
+ * `↑`/`↓` ahead/behind, `✓` clean and in step. The branch comes last, so a
+ * narrow pane cuts it before the markers.
+ */
+export function marks(tree: TreeStatus, defaultBranch: string | null): Mark[] {
+  if (tree.isPrunable) return [{ text: '✗ missing', color: 'error' }]
+  if (tree.error) return [{ text: '✗ unreadable', color: 'error' }]
+  const out: Mark[] = []
+  if (tree.conflicted) out.push({ text: `!${tree.conflicted}`, color: 'error' })
+  if (tree.staged) out.push({ text: `+${tree.staged}`, color: 'success' })
+  if (tree.unstaged) out.push({ text: `~${tree.unstaged}`, color: 'warning' })
+  if (tree.untracked) out.push({ text: `?${tree.untracked}`, color: 'warning' })
+  if (tree.ahead) out.push({ text: `↑${tree.ahead}`, color: 'suggestion' })
+  if (tree.behind) out.push({ text: `↓${tree.behind}`, color: 'inactive' })
+  if (out.length === 0) out.push({ text: '✓', color: 'success' })
+  const isDefault = tree.branch !== null && tree.branch === defaultBranch
+  out.push({ text: `⎇ ${tree.branch ?? `@${tree.head ?? '?'}`}`, color: isDefault ? 'inactive' : 'merged' })
+  return out
+}
+
+/** A line of the repo tree: a folder, a repo or one of its worktrees, after `tree`'s connectors. */
+export type TreeRow = {
+  prefix: string
+  kind: 'folder' | 'repo' | 'worktree'
+  name: string
+  /** The folder's or repo's path under the root, or the worktree's own path: what a fold is keyed by. */
+  path: string
+  tree: TreeStatus | null
+  defaultBranch: string | null
+  /** For a folded folder, how many repos it hides; otherwise 0. */
+  foldedRepos: number
+}
+
+type TreeNode = { children: Map<string, TreeNode>; repo: RepoStatus | null }
+
+function countRepos(node: TreeNode): number {
+  let count = node.repo ? 1 : 0
+  for (const child of node.children.values()) count += countRepos(child)
+  return count
+}
+
+/**
+ * The repos as `tree` draws folders: each folder once, its repos beneath it,
+ * and each repo's worktrees beneath the repo. A chain of folders holding only
+ * one folder each is drawn on one line (`group/a/b/`). A folder whose path is
+ * in `folded` is drawn without what is inside it.
+ */
+export function treeRows(repos: readonly RepoStatus[], folded: ReadonlySet<string> = new Set()): TreeRow[] {
+  const top: TreeNode = { children: new Map(), repo: null }
   for (const repo of repos) {
-    rows.push([repo.name, shortState(repo.tree), changeSummary(repo.tree), repo.recent[0] ?? ''])
-    for (const tree of repo.worktrees) {
-      rows.push([`  └ ${relativePath(root, tree.path)}`, shortState(tree), changeSummary(tree), ''])
+    let node = top
+    for (const part of repo.name.split('/')) {
+      let child = node.children.get(part)
+      if (!child) node.children.set(part, (child = { children: new Map(), repo: null }))
+      node = child
     }
+    node.repo = repo
   }
-  const widths = [0, 1, 2].map(column => Math.max(...rows.map(row => (row[column] ?? '').length)))
+
+  const rows: TreeRow[] = []
+  function walk(node: TreeNode, prefix: string, under: string): void {
+    const entries = [...node.children]
+    entries.forEach(([part, child], index) => {
+      const isLast = index === entries.length - 1
+      const branch = prefix + (isLast ? '└── ' : '├── ')
+      const below = prefix + (isLast ? '    ' : '│   ')
+      const repo = child.repo
+      if (repo) {
+        const { defaultBranch } = repo
+        rows.push({ prefix: branch, kind: 'repo', name: part, path: repo.name, tree: repo.tree, defaultBranch, foldedRepos: 0 })
+        repo.worktrees.forEach((tree, at) => {
+          const connector = at === repo.worktrees.length - 1 ? '└── ' : '├── '
+          const name = worktreeName(tree.path)
+          rows.push({ prefix: below + connector, kind: 'worktree', name, path: tree.path, tree, defaultBranch, foldedRepos: 0 })
+        })
+        return
+      }
+      let name = part
+      let folder = child
+      while (folder.children.size === 1) {
+        const [only] = folder.children
+        if (!only || only[1].repo) break
+        name += `/${only[0]}`
+        folder = only[1]
+      }
+      const path = under + name
+      const isFolded = folded.has(path)
+      const foldedRepos = isFolded ? countRepos(folder) : 0
+      rows.push({ prefix: branch, kind: 'folder', name: `${name}/`, path, tree: null, defaultBranch: null, foldedRepos })
+      if (!isFolded) walk(folder, below, `${path}/`)
+    })
+  }
+  walk(top, '', '')
   return rows
-    .map(row => row.map((cell, column) => (column < 3 ? cell.padEnd(widths[column] ?? 0) : cell)).join('  ').trimEnd())
+}
+
+/** The repo tree as plain text, for the transcript. */
+export function formatTable(repos: readonly RepoStatus[]): string {
+  if (repos.length === 0) return 'No git repos found under the workspace root.'
+  return treeRows(repos)
+    .map(row => {
+      const state = row.tree ? marks(row.tree, row.defaultBranch).map(mark => mark.text) : []
+      return [row.prefix + row.name, ...state].join(' ')
+    })
     .join('\n')
 }
 
-export function statusLine(repos: readonly RepoStatus[], cwd: string): string {
+export function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`
+}
+
+/** What opens the band: the repo the session is in, then counts across the workspace. */
+export function summaryLine(repos: readonly RepoStatus[], cwd: string): string {
   const trees = repos.flatMap(repo => [repo.tree, ...repo.worktrees])
   const dirty = trees.filter(isDirty).length
   const ahead = trees.filter(tree => tree.ahead > 0).length
   const worktrees = repos.reduce((sum, repo) => sum + repo.worktrees.length, 0)
-  const parts = [`⎇ ${repos.length} repos`]
-  if (worktrees) parts.push(`${worktrees} worktrees`)
+  const parts = [`⎇ ${plural(repos.length, 'repo')}`]
+  if (worktrees) parts.push(plural(worktrees, 'worktree'))
   if (dirty) parts.push(`${dirty} dirty`)
   if (ahead) parts.push(`${ahead} ahead`)
   const active = activeTree(repos, cwd)

@@ -4,14 +4,21 @@ import type { FsEntry } from 'claude-code'
 import type { Io } from '../hooks/git'
 import {
   classifyGitFile,
+  describeRepo,
+  emptyTree,
   findRepos,
   fingerprints,
   formatChanges,
+  formatTable,
+  needsAttention,
   parseStatus,
   parseWorktreeList,
   relativePath,
   resolvePath,
   shortState,
+  summaryLine,
+  treeRows,
+  worktreeName,
 } from '../hooks/git'
 
 const STATUS = [
@@ -83,6 +90,10 @@ describe('git', () => {
     expect(resolvePath('/ws/a/b', '../../c/./d')).toBe('/ws/c/d')
     expect(relativePath('/ws', '/ws/services/api')).toBe('services/api')
     expect(relativePath('/ws', '/elsewhere/api')).toBe('../elsewhere/api')
+    expect(worktreeName('/ws/.worktrees/orders--fix-refund-rounding')).toBe('fix-refund-rounding')
+    expect(worktreeName('/ws/.worktrees/old-name--PROJ-12-cleanup')).toBe('PROJ-12-cleanup')
+    expect(worktreeName('/tmp/spike_queue')).toBe('spike_queue')
+    expect(worktreeName('/tmp/trailing--')).toBe('trailing--')
   })
 
   /** An in-memory file tree: a path ending in `/` is a folder, `.git/` a repo. */
@@ -117,6 +128,7 @@ describe('git', () => {
         '/ws/web/.git/',
         '/ws/group/infra/.git/',
         '/ws/group/.terraform/modules/vpc/.git/', // dot-folder
+        '/ws/_archive/old/.git/', // parked work
         '/ws/tools/node_modules/pkg/.git/', // ignored name
         '/ws/a/b/c/four/.git/', // depth 4
         '/ws/a/b/c/d/five/.git/', // depth 5
@@ -149,5 +161,52 @@ describe('git', () => {
       '- api: main*, 1 untracked (?? todo.txt)',
     ])
     expect(formatChanges(before, [repo])).toEqual(['- /ws/web: no longer present'])
+  })
+
+  test('formatTable draws the repos as a tree, with markers before the branch', () => {
+    const clean = parseStatus('/ws/api', '# branch.oid aaaaaaa\n# branch.head main\n')
+    const fix = { ...clean, path: '/ws/api/.worktrees/api--fix', branch: 'fix' }
+    const broken = { ...emptyTree('/elsewhere/stale'), error: 'fatal: not a git repository: /old/.git/worktrees/stale' }
+    const api = { name: 'api', path: '/ws/api', defaultBranch: 'main', recent: [], tree: clean, worktrees: [fix, broken] }
+    const deep = { ...api, name: 'group/a/b/deep', tree: { ...clean, branch: 'feature', staged: 1, untracked: 1, ahead: 2 }, worktrees: [] }
+    const web = { ...api, name: 'services/web', tree: { ...clean, behind: 3 }, worktrees: [] }
+    const worker = { ...api, name: 'services/worker', worktrees: [] }
+
+    expect(formatTable([api, deep, web, worker]).split('\n')).toEqual([
+      '├── api ✓ ⎇ main',
+      '│   ├── fix ✓ ⎇ fix',
+      '│   └── stale ✗ unreadable',
+      '├── group/a/b/',
+      '│   └── deep +1 ?1 ↑2 ⎇ feature',
+      '└── services/',
+      '    ├── web ↓3 ⎇ main',
+      '    └── worker ✓ ⎇ main',
+    ])
+    expect(describeRepo(api)).toContain('Error: fatal: not a git repository: /old/.git/worktrees/stale')
+  })
+
+  test('a folded folder hides its repos and counts them', () => {
+    const clean = parseStatus('/ws/api', '# branch.oid aaaaaaa\n# branch.head main\n')
+    const api = { name: 'api', path: '/ws/api', defaultBranch: 'main', recent: [], tree: clean, worktrees: [] }
+    const repos = [api, { ...api, name: 'group/a/b/deep' }, { ...api, name: 'services/web' }, { ...api, name: 'services/worker' }]
+
+    const rows = treeRows(repos, new Set(['services', 'group/a/b']))
+    expect(rows.map(row => `${row.prefix}${row.name} ${row.foldedRepos}`)).toEqual([
+      '├── api 0',
+      '├── group/a/b/ 1',
+      '└── services/ 2',
+    ])
+  })
+
+  test('the band skips repos that are only behind; the status line counts in words', () => {
+    const behind = parseStatus('/ws/api', '# branch.oid aaaaaaa\n# branch.head main\n# branch.ab +0 -3\n')
+    const ahead = parseStatus('/ws/web', '# branch.oid aaaaaaa\n# branch.head main\n# branch.ab +1 -0\n')
+    const api = { name: 'api', path: '/ws/api', defaultBranch: 'main', recent: [], tree: behind, worktrees: [] }
+    const web = { ...api, name: 'web', path: '/ws/web', tree: ahead }
+    expect(needsAttention(api)).toBe(false)
+    expect(needsAttention(web)).toBe(true)
+
+    expect(summaryLine([api], '/ws')).toBe('⎇ 1 repo')
+    expect(summaryLine([api, { ...web, worktrees: [behind] }], '/ws')).toBe('⎇ 2 repos · 1 worktree · 1 ahead')
   })
 })
