@@ -153,14 +153,15 @@ CI (`.github/workflows/build.yml`) runs `deps`, `check`, `test`, `smoke` and `pa
 
 ## Releasing
 
-[Release Drafter](https://github.com/release-drafter/release-drafter) keeps a draft release up to date as pull requests merge to `main`. It sorts them by label (`feature`/`enhancement`, `fix`/`bugfix`/`bug`, `chore`) and picks the next version from `major`, `minor` or `patch` labels (patch by default).
+1. Bump the version in a pull request: `make version VERSION=x.y.z`.
+2. Merge it. [Release Drafter](https://github.com/release-drafter/release-drafter) updates the draft release to `vx.y.z`, with merged pull requests sorted by label (`feature`/`enhancement`, `fix`/`bugfix`/`bug`, `chore`/`dependencies`/`documentation`).
+3. Publish the draft. `.github/workflows/release.yml` checks the tag matches `plugin.json`, runs the checks and tests, and attaches `multi-repo-vx.y.z.plugin` to the release.
 
-Publishing the draft runs `.github/workflows/release.yml`, which:
+The version lives in `plugin.json` and changes only through pull requests, so CI never pushes to `main`. Labels are kept in `.github/labels.yml` and synced by `.github/workflows/labels.yml`.
 
-1. sets `plugin.json`'s version from the tag
-2. runs the checks and tests
-3. attaches `multi-repo-v<version>.plugin` to the release
-4. commits the version to `main`, since plugins install from the repo
+## Contributing
+
+Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
 
 ## Author
 

@@ -18,8 +18,15 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Set version from tag
-        run: make version VERSION=${GITHUB_REF_NAME#v}
+      # plugin.json is bumped in a pull request before the release, so main
+      # never needs a push from CI and can stay fully protected.
+      - name: Check the tag matches plugin.json
+        run: |
+          version=$(jq -r .version .claude-plugin/plugin.json)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match plugin.json version $version. Bump it with 'make version VERSION=x.y.z' in a pull request first."
+            exit 1
+          fi
 
       - name: Run checks and tests
         run: |
@@ -31,19 +38,3 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$GITHUB_REF_NAME" "$(make --silent package)" --clobber
-
-      # Plugins install from the repo, so main's plugin.json carries the
-      # released version; `claude plugin update` reads it from there.
-      - name: Record the version on main
-        run: |
-          git fetch --depth 1 origin main
-          git checkout -B main origin/main
-          make version VERSION=${GITHUB_REF_NAME#v}
-          if git diff --quiet; then
-            echo "main already at ${GITHUB_REF_NAME#v}"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "Release ${GITHUB_REF_NAME}"
-          git push origin main
