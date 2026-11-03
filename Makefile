@@ -27,6 +27,7 @@ typecheck: ## Type-check; needs the types Claude Code writes into .claude-plugin
 
 version: ## Set the plugin's version: make version VERSION=1.2.3
 	@test -n "$(VERSION)" || (echo "usage: make version VERSION=1.2.3" && exit 1)
+	@! git ls-remote --exit-code --tags origin "refs/tags/v$(VERSION)" >/dev/null || (echo "v$(VERSION) is already released; pick a later version" && exit 1)
 	jq --arg version "$(VERSION)" '.version = $$version' .claude-plugin/plugin.json > .claude-plugin/plugin.json.tmp
 	mv .claude-plugin/plugin.json.tmp .claude-plugin/plugin.json
 
