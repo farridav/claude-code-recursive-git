@@ -48,16 +48,34 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The draft's version is plugin.json's, so the tag it publishes always
-      # matches the version people install; labels sort the changelog.
+      # A version bump in plugin.json, merged, is a release: the draft takes
+      # that version and is published below. Until the next bump the version
+      # is already tagged, so the draft previews the next one from the labels.
       - name: Read the plugin's version
         id: plugin
-        run: echo "version=$(jq -r .version .claude-plugin/plugin.json)" >> "$GITHUB_OUTPUT"
+        run: |
+          version=$(jq -r .version .claude-plugin/plugin.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
+            echo "is_new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_new=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: release-drafter/release-drafter@v7
         with:
           config-name: release-drafter.yml
-          disable-autolabeler: true
-          version: ${{ steps.plugin.outputs.version }}
+          version: ${{ steps.plugin.outputs.is_new == 'true' && steps.plugin.outputs.version || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Releases are immutable once published, so the package goes on while
+      # the release is a draft, and publishing comes last, at the tested commit.
+      - name: Publish the release
+        if: steps.plugin.outputs.is_new == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v${{ steps.plugin.outputs.version }}"
+          gh release upload "$tag" "$(make --silent package)" --clobber
+          gh release edit "$tag" --draft=false --target "$GITHUB_SHA"
