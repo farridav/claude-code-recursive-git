@@ -1,5 +1,16 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-code-recursive-git",
+  "description": "Claude Code mods for working across many git repos from one session",
   "owner": { "name": "farridav" },
-  "plugins": [{ "name": "multi-repo", "source": "./" }]
+  "plugins": [
+    {
+      "name": "multi-repo",
+      "description": "Git awareness across every repo in a folder of repos: per-repo status and worktrees in Claude's context, guidance for working across repos in parallel, a status line, a band, a /repos pane, /repos-fetch and a repo_status tool",
+      "author": { "name": "farridav" },
+      "category": "development",
+      "homepage": "https://github.com/farridav/claude-code-recursive-git",
+      "source": "./"
+    }
+  ]
 }

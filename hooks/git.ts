@@ -183,8 +183,21 @@ export function parseWorktreeList(stdout: string): WorktreeEntry[] {
 
 // ---------------------------------------------------------------- reading
 
+/**
+ * The environment every git child runs in: the C locale, so output parses
+ * the same everywhere, and no credential prompt, so a fetch fails instead of
+ * hanging on a repo that needs a password.
+ */
+export const GIT_ENV = { LC_ALL: 'C', LANGUAGE: '', GIT_TERMINAL_PROMPT: '0' }
+
+/**
+ * Runs git in one repo. `--no-optional-locks` keeps `git status` from taking
+ * the index lock, so a background refresh never collides with the person's
+ * own git commands or Claude's.
+ */
 async function git(io: Io, path: string, args: string[], timeoutMs = 15_000) {
-  return io.run(['git', '-C', path, ...args], { timeoutMs }).catch(error => ({
+  const argv = ['git', '--no-optional-locks', '-C', path, ...args]
+  return io.run(argv, { timeoutMs, env: GIT_ENV }).catch(error => ({
     exitCode: 1,
     stdout: '',
     stderr: String(error),

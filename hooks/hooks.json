@@ -1,1 +1,4 @@
-{ "modules": ["./register.tsx"] }
+{
+  "description": "Multi-repo git awareness: a session.start hook finds the git repos below the session root (4 levels by default, never inside a repo, skipping dot-folders and dependency folders) and registers /repos, /repos-fetch and the repo_status tool; prompt.context adds a status snapshot of every repo and its worktrees, prompt.compose adds guidance for working across repos, prompt.section corrects the env section's git line, and prompt.submit attaches the repos that changed since Claude last saw them; tool.call refreshes after edits, shell commands and worktree moves; ui.render draws the band of repos needing attention and the /repos pane",
+  "modules": ["./register.tsx"]
+}

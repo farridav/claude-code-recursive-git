@@ -1,31 +1,43 @@
 {
   "name": "multi-repo",
   "version": "0.1.0",
-  "description": "Git awareness across every repo in a multi-repo workspace: status, worktrees, context and guidance per repo",
+  "description": "Git awareness across every repo in a folder of repos: per-repo status and worktrees in Claude's context, guidance for working across repos in parallel, a status line, a band, a /repos pane, /repos-fetch and a repo_status tool",
   "author": {
     "name": "farridav"
   },
-  "license": "MIT",
+  "homepage": "https://github.com/farridav/claude-code-recursive-git",
   "repository": "https://github.com/farridav/claude-code-recursive-git",
+  "license": "MIT",
+  "keywords": [
+    "git",
+    "multi-repo",
+    "monorepo",
+    "worktree",
+    "workspace",
+    "status"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "scanDepth": {
       "type": "number",
       "title": "Scan depth",
       "description": "How many folder levels below the session root to look for git repos",
-      "default": 4
+      "default": 4,
+      "required": false
     },
     "ignore": {
       "type": "string",
       "title": "Extra folders to skip",
       "description": "Comma-separated folder names never searched for repos, added to the built-in list (node_modules, vendor, ...)",
-      "default": ""
+      "default": "",
+      "required": false
     },
     "showBand": {
       "type": "boolean",
       "title": "Show repo band",
       "description": "Show the repos with changes above the prompt",
-      "default": true
+      "default": true,
+      "required": false
     }
   }
 }

@@ -1,47 +1,63 @@
 # multi-repo
 
-A Claude Code mod for people who start Claude Code in a folder that **holds** many git repos, rather than inside one repo, and work across them in parallel.
+Git awareness for Claude Code sessions started in a folder that **holds** many git repos, for people who work across them in parallel.
 
-On its own, Claude Code treats such a folder as "not a git repository". It shows no branch, gives Claude no git status, and leaves Claude to work out the layout itself. This mod finds every repo under the folder and gives each one the git awareness a single-repo session has.
+## Overview
 
-## What you get
+When you start Claude Code inside one repo, Claude knows its branch, main branch, status and recent commits. When you start it in a folder of repos, Claude Code sees "not a git repository": no branch in the UI, no git status for Claude, and no hint of how the folder is laid out.
 
-| In a single repo, Claude Code has… | With this mod, in a multi-repo folder |
+This mod finds every repo under the folder and gives each one that single-repo experience. Linked worktrees are included wherever they live on disk.
+
+| In a single repo, Claude Code has… | With this mod, in a folder of repos |
 | --- | --- |
 | A `gitStatus` snapshot in Claude's context (branch, main branch, status, recent commits) | A `multiRepoStatus` snapshot covering **every** repo and its worktrees |
-| The status refreshed as you work | Each prompt carries the repos that **changed** since Claude last saw them, and only those |
-| Git commands that just work | System-prompt guidance: `git -C <repo>`, one commit/PR per repo, parallel work across repos, one worktree per parallel task in the same repo |
-| The branch in the UI | A status line (`⎇ 12 repos · 2 worktrees · 3 dirty · 1 ahead`, plus the repo you are in), and a band above the prompt with the repos that need attention (`api main* ↑2 +1wt`) |
-| — | `/repos`: a pane with every repo and worktree, plus Refresh and Fetch all buttons |
-| — | `/repos-fetch`: `git fetch --all --prune` in every repo, in parallel |
-| — | A `repo_status` tool Claude calls for fresh status of one repo or all of them |
+| Status that keeps up with your work | Each prompt carries the repos that **changed** since Claude last saw them, and only those |
+| Git commands that just work | Guidance in the system prompt: `git -C <repo>`, one commit and PR per repo, parallel work across repos, one worktree per parallel task in the same repo |
+| The branch in the UI | A status line (`▸ api main* · ⎇ 12 repos · 2 worktrees · 3 dirty · 1 ahead`) and a band above the prompt with the repos that need attention (`api main* ↑2 +1wt`) |
 
-Status refreshes after each Bash, Edit, Write, EnterWorktree and ExitWorktree call, every 60 seconds, and before a prompt when the last scan is more than 10 seconds old.
+## Commands
+
+### `/repos`
+
+Opens a pane listing every repo with its branch, distance from upstream, changes and last commit. Each repo's linked worktrees are indented beneath it. The pane has **Refresh** (`r`) and **Fetch all** (`f`) buttons. The same table is printed in the transcript.
+
+### `/repos-fetch`
+
+Runs `git fetch --all --prune` in every repo, eight at a time. It then refreshes and names the repos whose fetch failed and the ones now behind their upstream.
+
+### The `repo_status` tool
+
+Claude calls `repo_status` for fresh status of one repo (`repo: "services/api"`) or all of them. Claude doesn't have to hand-roll `for d in */; do git -C $d status; done` loops.
+
+## How repos are found
+
+- The scan starts in the folder the session started in. That folder stays the workspace root after `EnterWorktree` moves the session.
+- It goes up to **4 levels** down (`scanDepth`).
+- It never looks inside a repo it has found. Dependency checkouts inside your repos are never picked up: `node_modules`, `.terraform`, vendored Ansible roles, packages that ship a whole git repo.
+- Between the root and your repos, it skips:
+  - hidden folders (`.terraform`, `.venv`, `.ansible`, `.cache`, …)
+  - `node_modules, vendor, venv, site-packages, bower_components, Pods, target, dist, build, galaxy_roles, collections`
+  - any names you add with `ignore`
+- If the starting folder is itself a repo, the mod does nothing: Claude Code's own git support covers that case.
 
 ## Worktrees
 
-- Linked worktrees are listed under their repo, wherever they live on disk: next to the repo, in `.claude/worktrees/`, or anywhere else. They come from `git worktree list`, so each one appears once. Worktrees whose folder has gone are marked prunable.
-- A folder whose `.git` is a file pointing at `<repo>/.git/worktrees/…` is folded into its main repo. A submodule (its `.git` points into `.git/modules/…`) belongs to its parent repo and is not listed on its own.
-- The folder you started in stays the workspace root after `EnterWorktree` moves the session. The status line shows which repo or worktree you are in.
-
-## Which repos are found
-
-- Folders up to **4 levels** below the session's starting folder (`scanDepth` changes this).
-- The scan never looks inside a repo it has found. Dependency checkouts inside your repos (`node_modules`, `.terraform`, vendored Ansible roles, packages that ship a whole git repo) are never picked up.
-- Between the root and your repos it skips hidden folders (`.terraform`, `.venv`, `.ansible`, `.cache`, …) and `node_modules, vendor, venv, site-packages, bower_components, Pods, target, dist, build, galaxy_roles, collections`. The `ignore` setting adds more names.
-- If the starting folder is itself a repo, the mod does nothing: Claude Code's own git support already covers it.
+- Each repo's linked worktrees come from `git worktree list`, so worktrees outside the workspace are listed too: `.claude/worktrees/*` made by `EnterWorktree`, `../api-hotfix`, and so on. Each worktree gets its own branch, changes and ahead/behind, and appears once.
+- A folder whose `.git` is a file pointing at `<repo>/.git/worktrees/…` is folded into its main repo. A worktree whose folder has gone is marked prunable.
+- A submodule (its `.git` points into `.git/modules/…`) belongs to its parent repo and is not listed on its own.
+- The status line names the repo or worktree the session is in.
 
 ## Settings
 
 Set these in `/config`, or under `pluginConfigs.multi-repo` in settings:
 
-| Setting | Default | |
+| Setting | Default | What it does |
 | --- | --- | --- |
 | `scanDepth` | `4` | How many folder levels below the root to search |
 | `ignore` | `""` | Extra folder names to skip, comma-separated |
 | `showBand` | `true` | Show the band of repos with changes above the prompt |
 
-## Install
+## Installation
 
 At the prompt of a Claude Code session:
 
@@ -57,12 +73,81 @@ claude plugin install multi-repo --marketplace farridav/claude-code-recursive-gi
 
 In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `farridav/claude-code-recursive-git`, then Add plugin.
 
+## Requirements
+
+- A Claude Code build where function hooks (mods) are enabled. This API is early access and may change between releases.
+- `git` 2.15 or newer, on the `PATH`. Prunable worktrees are flagged by git 2.31 or newer.
+- macOS or Linux. Windows paths are untested.
+
+## Troubleshooting
+
+**Nothing appears: no status line, no `/repos`.** The mod switches itself off when the session's folder is itself a git repo, or when it finds no repos below it. Start Claude Code in the folder that holds your repos.
+
+**A repo is missing.** It may be deeper than `scanDepth` or inside a hidden or ignored folder. Raise `scanDepth`, or move the repo out of the ignored folder.
+
+**A dependency's repo shows up.** Add its parent folder's name to `ignore`.
+
+**`/repos-fetch` reports failures.** Fetches never prompt for credentials. A repo that needs a password fails until a credential helper or SSH agent can answer for it.
+
+**The status looks stale.** It refreshes after Claude's edits, shell commands and worktree moves, every 60 seconds, and before a prompt once the last scan is 10 seconds old. Press **Refresh** in `/repos` to read it now.
+
+## What it hooks
+
+| Event | What the hook does |
+| --- | --- |
+| `session.start` | Fixes the workspace root, scans for repos, and, when it finds some, registers `repo_status`, `/repos` and `/repos-fetch` and starts the 60-second refresh |
+| `session.end` | On `/clear`, forgets what Claude was told, so the new conversation gets a fresh snapshot |
+| `prompt.context` | Adds the `multiRepoStatus` block: every repo's branch, main branch, upstream distance, changed files, recent commits and worktrees |
+| `prompt.compose` | Adds the `multi-repo:guidance` section on working across repos and worktrees |
+| `prompt.section` of `env_info_simple` | Rewrites "Is a git repository" to say the root is a multi-repo workspace |
+| `prompt.submit` | Attaches the repos and worktrees whose state changed since Claude last saw them |
+| `tool.call` of `repo_status` | Answers with fresh status for one repo or all of them |
+| `tool.call` of `Bash`, `Edit`, `Write`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree` | Refreshes 1.5 seconds after the last such call |
+| `command.run` of `repos`, `repos-fetch` | Opens the pane and prints the table; fetches every repo |
+| `ui.render` of `AbovePrompt` | Draws the band of repos needing attention, or nothing when all are clean |
+| `ui.render` of the `multi-repo` `Pane` | Draws the repo and worktree list with Refresh and Fetch all |
+
+The system prompt and the first message's context answer the same way for a whole conversation, so the prompt cache holds. Changes reach Claude only as context attached to later prompts.
+
+## What it calls on `$`
+
+`clock.after`, `clock.every`, `clock.now`, `command.register`, `fs.list`, `fs.read`, `process.run` (git), `session.cwd`, `session.root`, `state.get`, `state.set`, `tool.register`, `ui.open`, `ui.resolve`, `ui.status`, `ui.toast`.
+
+## Git commands it runs
+
+Each runs as `git --no-optional-locks -C <repo> …`, in the C locale, with `GIT_TERMINAL_PROMPT=0`. `--no-optional-locks` keeps a background `git status` from taking the index lock, so it never collides with your git commands or Claude's.
+
+| Command | When |
+| --- | --- |
+| `status --porcelain=v2 --branch --untracked-files=normal` | Every refresh, for each repo and worktree |
+| `worktree list --porcelain` | Every refresh, for each repo |
+| `log -5 --format=%h %s` | Every refresh, for each repo |
+| `symbolic-ref --short refs/remotes/origin/HEAD`, then `rev-parse --verify --quiet refs/heads/main` or `master` | Every refresh, to name the main branch |
+| `fetch --all --prune --quiet` | Only from `/repos-fetch` or the pane's Fetch all |
+
+Everything but the fetch is read-only.
+
 ## Developing
 
+Run it from a checkout:
+
+```sh
+claude --plugin-dir /path/to/claude-code-recursive-git
 ```
-claude --plugin-dir /path/to/claude-code-recursive-git   # run it from a checkout
+
+The engine then writes this build's API types into `.claude-plugin/types/`, which `tsconfig.json` extends:
+
+```sh
+tsc -p .
 claude plugin validate .
 claude plugin test .
 ```
 
-`hooks/git.ts` holds discovery, git parsing and the text Claude reads, as plain functions. `hooks/register.tsx` wires them to Claude Code's hooks.
+- `hooks/register.tsx` is the hooks module.
+- `hooks/git.ts` holds discovery, git parsing and the text Claude reads, as plain functions.
+- `types/index.d.ts` is the contract for the values kept in `$.state`.
+- Tests are in `tests/`, one file for what each module covers.
+
+## Author
+
+farridav. Released under the [MIT License](LICENSE).
