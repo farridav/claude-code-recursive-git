@@ -43,6 +43,7 @@ function buildWorkspace(root: string): void {
 
   makeRepo(join(root, 'tools', 'node_modules', 'pkg')) // an ignored folder name
   makeRepo(join(root, 'infra', '.terraform', 'modules', 'vpc')) // a dot-folder
+  makeRepo(join(root, '_archive', 'old')) // parked work in a `_` folder
   makeRepo(join(root, 'group', 'a', 'b', 'four')) // depth 4: found
   makeRepo(join(root, 'group', 'a', 'b', 'c', 'five')) // depth 5: past the default
 }
@@ -88,7 +89,7 @@ try {
   buildWorkspace(root)
   const ignore = new Set(DEFAULT_IGNORE)
   const repos = await scanAll(io, root, 4, ignore)
-  console.log(formatTable(root, repos) + '\n')
+  console.log(formatTable(repos) + '\n')
 
   const names = repos.map(repo => repo.name)
   check(JSON.stringify(names) === JSON.stringify(['clean', 'dirty', 'group/a/b/four', 'lib']), `finds the four repos: ${names.join(', ')}`)
@@ -98,6 +99,7 @@ try {
   check(!names.includes('clean-feature'), 'does not list the worktree as a repo of its own')
   check(!names.some(name => name.includes('libs')), 'leaves the submodule to its parent')
   check(!names.some(name => name.includes('node_modules') || name.includes('.terraform')), 'skips dependency checkouts')
+  check(!names.some(name => name.startsWith('_archive')), 'skips `_` folders')
 
   const dirty = repos.find(repo => repo.name === 'dirty')
   check(dirty?.tree.branch === 'main' && dirty.tree.untracked > 0 && dirty.tree.staged > 0, 'reads branch and changes')

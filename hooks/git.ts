@@ -55,6 +55,11 @@ export function relativePath(from: string, to: string): string {
   return [...up, ...b.slice(shared)].join('/') || '.'
 }
 
+/** The last segment of a path: how a worktree is named in the table, pane and band. */
+export function baseName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1)
+}
+
 // ---------------------------------------------------------------- discovery
 
 /**
@@ -75,8 +80,9 @@ export function classifyGitFile(dir: string, text: string): { kind: 'worktree'; 
 
 /**
  * Finds the git repos under `root`, at most `maxDepth` folders down. It never
- * looks inside a repo, nor into dot-folders or the `ignore` names, so
- * dependency checkouts (node_modules, .terraform, vendored roles) stay out.
+ * looks inside a repo, nor into dot-folders, `_` folders or the `ignore` names,
+ * so dependency checkouts (node_modules, .terraform, vendored roles) and
+ * parked work (`_archive`) stay out.
  */
 export async function findRepos(io: Io, root: string, maxDepth: number, ignore: ReadonlySet<string>): Promise<string[]> {
   const found = new Set<string>()
@@ -96,7 +102,7 @@ export async function findRepos(io: Io, root: string, maxDepth: number, ignore: 
     }
     if (depth >= maxDepth) return
     const children = entries.filter(
-      entry => entry.kind === 'dir' && !entry.name.startsWith('.') && !ignore.has(entry.name),
+      entry => entry.kind === 'dir' && !/^[._]/.test(entry.name) && !ignore.has(entry.name),
     )
     await Promise.all(children.map(child => walk(joinPath(dir, child.name), depth + 1)))
   }
@@ -275,16 +281,15 @@ export function isDirty(tree: TreeStatus): boolean {
   return tree.staged + tree.unstaged + tree.untracked + tree.conflicted > 0
 }
 
+/** Changed, ahead or unreadable. A repo that is only behind its upstream waits for /repos. */
 export function needsAttention(repo: RepoStatus): boolean {
-  return [repo.tree, ...repo.worktrees].some(
-    tree => isDirty(tree) || tree.ahead > 0 || tree.behind > 0 || tree.error !== null,
-  )
+  return [repo.tree, ...repo.worktrees].some(tree => isDirty(tree) || tree.ahead > 0 || tree.error !== null)
 }
 
 /** `main* ↑2 ↓1`: the branch, a star when dirty, and the distance to upstream. */
 export function shortState(tree: TreeStatus): string {
   if (tree.isPrunable) return 'missing (prunable)'
-  if (tree.error) return `error: ${tree.error}`
+  if (tree.error) return 'unreadable'
   const branch = tree.branch ?? `detached@${tree.head ?? '?'}`
   const parts = [branch + (isDirty(tree) ? '*' : '')]
   if (tree.ahead) parts.push(`↑${tree.ahead}`)
@@ -292,7 +297,9 @@ export function shortState(tree: TreeStatus): string {
   return parts.join(' ')
 }
 
+/** Nothing for a tree git couldn't read: its counts are empty, not clean. */
 export function changeSummary(tree: TreeStatus): string {
+  if (tree.error || tree.isPrunable) return ''
   const parts: string[] = []
   if (tree.conflicted) parts.push(`${tree.conflicted} conflicted`)
   if (tree.staged) parts.push(`${tree.staged} staged`)
@@ -305,6 +312,7 @@ function describeTree(tree: TreeStatus, indent: string): string[] {
   const lines: string[] = []
   const upstream = tree.upstream ? ` (tracking ${tree.upstream})` : ' (no upstream)'
   lines.push(`${indent}Branch: ${shortState(tree)}${tree.error || tree.isPrunable ? '' : upstream}`)
+  if (tree.error) lines.push(`${indent}Error: ${tree.error}`)
   if (tree.error || tree.isPrunable) return lines
   lines.push(`${indent}Status: ${changeSummary(tree)}`)
   for (const file of tree.files) lines.push(`${indent}  ${file}`)
@@ -361,7 +369,8 @@ export function formatChanges(before: Record<string, string>, repos: readonly Re
       const label = tree === repo.tree ? repo.name : `${repo.name} worktree ${tree.path}`
       const isNew = before[tree.path] === undefined ? ' (new)' : ''
       const files = tree.files.slice(0, 5).join(', ')
-      lines.push(`- ${label}${isNew}: ${shortState(tree)}, ${changeSummary(tree)}${files ? ` (${files})` : ''}`)
+      const state = [shortState(tree), changeSummary(tree)].filter(Boolean).join(', ')
+      lines.push(`- ${label}${isNew}: ${state}${files ? ` (${files})` : ''}`)
     }
   }
   for (const path of Object.keys(before)) {
@@ -370,13 +379,13 @@ export function formatChanges(before: Record<string, string>, repos: readonly Re
   return lines
 }
 
-export function formatTable(root: string, repos: readonly RepoStatus[]): string {
+export function formatTable(repos: readonly RepoStatus[]): string {
   if (repos.length === 0) return 'No git repos found under the workspace root.'
   const rows: string[][] = []
   for (const repo of repos) {
     rows.push([repo.name, shortState(repo.tree), changeSummary(repo.tree), repo.recent[0] ?? ''])
     for (const tree of repo.worktrees) {
-      rows.push([`  └ ${relativePath(root, tree.path)}`, shortState(tree), changeSummary(tree), ''])
+      rows.push([`  └ ${baseName(tree.path)}`, shortState(tree), changeSummary(tree), ''])
     }
   }
   const widths = [0, 1, 2].map(column => Math.max(...rows.map(row => (row[column] ?? '').length)))
@@ -385,13 +394,17 @@ export function formatTable(root: string, repos: readonly RepoStatus[]): string 
     .join('\n')
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`
+}
+
 export function statusLine(repos: readonly RepoStatus[], cwd: string): string {
   const trees = repos.flatMap(repo => [repo.tree, ...repo.worktrees])
   const dirty = trees.filter(isDirty).length
   const ahead = trees.filter(tree => tree.ahead > 0).length
   const worktrees = repos.reduce((sum, repo) => sum + repo.worktrees.length, 0)
-  const parts = [`⎇ ${repos.length} repos`]
-  if (worktrees) parts.push(`${worktrees} worktrees`)
+  const parts = [`⎇ ${plural(repos.length, 'repo')}`]
+  if (worktrees) parts.push(plural(worktrees, 'worktree'))
   if (dirty) parts.push(`${dirty} dirty`)
   if (ahead) parts.push(`${ahead} ahead`)
   const active = activeTree(repos, cwd)

@@ -13,13 +13,13 @@ This mod finds every repo under the folder and gives each one that single-repo e
 | A `gitStatus` snapshot in Claude's context (branch, main branch, status, recent commits) | A `multiRepoStatus` snapshot covering **every** repo and its worktrees |
 | Status that keeps up with your work | Each prompt carries the repos that **changed** since Claude last saw them, and only those |
 | Git commands that just work | Guidance in the system prompt: `git -C <repo>`, one commit and PR per repo, parallel work across repos, one worktree per parallel task in the same repo |
-| The branch in the UI | A status line (`▸ api main* · ⎇ 12 repos · 2 worktrees · 3 dirty · 1 ahead`) and a band above the prompt with the repos that need attention (`api main* ↑2 +1wt`) |
+| The branch in the UI | A status line (`▸ api main* · ⎇ 12 repos · 2 worktrees · 3 dirty · 1 ahead`) and a band above the prompt with the repos that have changes, unpushed commits or an unreadable worktree (`api main* ↑2 +1wt`) |
 
 ## Commands
 
 ### `/repos`
 
-Opens a pane listing every repo with its branch, distance from upstream, changes and last commit. Each repo's linked worktrees are indented beneath it. The pane has **Refresh** (`r`) and **Fetch all** (`f`) buttons. The same table is printed in the transcript.
+Opens a pane listing every repo with its branch, distance from upstream, changes and last commit. Each repo's linked worktrees are indented beneath it, by folder name. The pane has **Refresh** (`r`) and **Fetch all** (`f`) buttons. The same table is printed in the transcript.
 
 ### `/repos-fetch`
 
@@ -36,6 +36,7 @@ Claude calls `repo_status` for fresh status of one repo (`repo: "services/api"`)
 - It never looks inside a repo it has found. Dependency checkouts inside your repos are never picked up: `node_modules`, `.terraform`, vendored Ansible roles, packages that ship a whole git repo.
 - Between the root and your repos, it skips:
   - hidden folders (`.terraform`, `.venv`, `.ansible`, `.cache`, …)
+  - folders starting with `_`, such as `_archive`
   - `node_modules, vendor, venv, site-packages, bower_components, Pods, target, dist, build, galaxy_roles, collections`
   - any names you add with `ignore`
 - If the starting folder is itself a repo, the mod does nothing: Claude Code's own git support covers that case.
@@ -43,7 +44,7 @@ Claude calls `repo_status` for fresh status of one repo (`repo: "services/api"`)
 ## Worktrees
 
 - Each repo's linked worktrees come from `git worktree list`, so worktrees outside the workspace are listed too: `.claude/worktrees/*` made by `EnterWorktree`, `../api-hotfix`, and so on. Each worktree gets its own branch, changes and ahead/behind, and appears once.
-- A folder whose `.git` is a file pointing at `<repo>/.git/worktrees/…` is folded into its main repo. A worktree whose folder has gone is marked prunable.
+- A folder whose `.git` is a file pointing at `<repo>/.git/worktrees/…` is folded into its main repo. A worktree whose folder has gone is marked prunable. One git can't read (say, its link to the repo is stale) is marked unreadable, and Claude is given git's error.
 - A submodule (its `.git` points into `.git/modules/…`) belongs to its parent repo and is not listed on its own.
 - The status line names the repo or worktree the session is in.
 
@@ -104,7 +105,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | `tool.call` of `repo_status` | Answers with fresh status for one repo or all of them |
 | `tool.call` of `Bash`, `Edit`, `Write`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree` | Refreshes 1.5 seconds after the last such call |
 | `command.run` of `repos`, `repos-fetch` | Opens the pane and prints the table; fetches every repo |
-| `ui.render` of `AbovePrompt` | Draws the band of repos needing attention, or nothing when all are clean |
+| `ui.render` of `AbovePrompt` | Draws the band of repos with changes, unpushed commits or an unreadable worktree, or nothing when there are none. Repos only behind their upstream are left to `/repos` |
 | `ui.render` of the `multi-repo` `Pane` | Draws the repo and worktree list with Refresh and Fetch all |
 
 The system prompt and the first message's context answer the same way for a whole conversation, so the prompt cache holds. Changes reach Claude only as context attached to later prompts.

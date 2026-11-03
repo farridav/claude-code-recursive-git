@@ -6,6 +6,7 @@ import type { Io } from './git'
 import {
   DEFAULT_IGNORE,
   GUIDANCE,
+  baseName,
   changeSummary,
   describeRepo,
   fetchAll,
@@ -14,7 +15,6 @@ import {
   formatSnapshot,
   formatTable,
   needsAttention,
-  relativePath,
   scanAll,
   shortState,
   statusLine,
@@ -199,7 +199,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'repos' }, async $ => {
     const repos = await refresh()
     await $.ui.open({ id: PANE, title: 'Repos' })
-    return { text: formatTable((await read($, rootAtom)) ?? '', repos) }
+    return { text: formatTable(repos) }
   })
 
   on('command.run', { command: 'repos-fetch' }, async $ => {
@@ -276,7 +276,7 @@ export const register: Register = (on, options) => {
             {repo.worktrees.map(tree => (
               <Text wrap="truncate" dimColor={!needsAttention({ ...repo, tree, worktrees: [] })}>
                 {'  └ '}
-                {relativePath(root, tree.path)} {shortState(tree)} {changeSummary(tree)}
+                {baseName(tree.path)} {shortState(tree)} {changeSummary(tree)}
               </Text>
             ))}
           </Box>
