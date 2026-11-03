@@ -1,6 +1,6 @@
 {
   "name": "multi-repo",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Git awareness across every repo in a folder of repos: per-repo status and worktrees in Claude's context, guidance for working across repos in parallel, a band above the prompt, a /repos pane that tidies worktrees, /repos-fetch and a repo_status tool",
   "author": {
     "name": "farridav"
