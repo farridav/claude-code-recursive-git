@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in the mod doesn't work as described
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: layout
+    attributes:
+      label: Workspace layout
+      description: How your repos are laid out under the folder you start Claude Code in (worktrees, submodules, depth). Names can be made up.
+      placeholder: |
+        workspace/
+          api/            (repo, one linked worktree in ../api-hotfix)
+          infra/terraform (repo)
+    validations:
+      required: true
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code version
+      description: The output of `claude --version`.
+    validations:
+      required: true
+  - type: input
+    id: git-version
+    attributes:
+      label: git version
+      description: The output of `git --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where you run Claude Code
+      options: [Terminal, Desktop app, VS Code, Web or mobile, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Any `multi-repo:` lines from the transcript, or from `claude --debug`.
+      render: text

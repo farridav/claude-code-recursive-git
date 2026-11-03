@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -43,9 +46,18 @@ jobs:
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
+      - uses: actions/checkout@v5
+
+      # The draft's version is plugin.json's, so the tag it publishes always
+      # matches the version people install; labels sort the changelog.
+      - name: Read the plugin's version
+        id: plugin
+        run: echo "version=$(jq -r .version .claude-plugin/plugin.json)" >> "$GITHUB_OUTPUT"
+
       - uses: release-drafter/release-drafter@v6
         with:
           config-name: release-drafter.yml
           disable-autolabeler: true
+          version: ${{ steps.plugin.outputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
