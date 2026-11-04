@@ -28,7 +28,7 @@ In Claude Code Desktop the pane sits beside the conversation, and Claude answers
 
 ### `/repos`
 
-Opens the pane, which also opens when the session starts, with every repo drawn as a tree, the way `tree` draws folders. Each repo's linked worktrees hang beneath it, named by their folder less any `<repo>--` prefix. Click a folder in the pane to fold it away (`▸`) or open it again (`▾`). The same tree, without colour or folding, is printed in the transcript.
+Opens the pane, which also opens when the session starts, with every repo drawn as a tree, the way `tree` draws folders. Each repo's linked worktrees hang beneath it, named by their folder less any `<repo>--` prefix. Click a folder in the pane to fold it away (`▸`) or open it again (`▾`). Click the `✕` beside a worktree to remove it, after asking, or a branch (`⎇ main`) to pick another from a dropdown. A branch other than the main branch, not yet merged, has a `PR` button: it drafts the ask in the prompt box (open a pull request for that branch, with a title and description from its commits) for you to edit or send, so Claude writes it with `gh` or `glab`. The same tree, without colour or folding, is printed in the transcript.
 
 ```
 ├── apps/
@@ -49,12 +49,13 @@ Opens the pane, which also opens when the session starts, with every repo drawn 
 | Marker | Meaning |
 | --- | --- |
 | `✓` | Clean and level with its upstream |
-| `+2` `~1` `?1` `!1` | Staged, modified, untracked and conflicted files |
+| `+228` `−28` | Lines added and removed against `HEAD`, staged and unstaged together |
+| `~1` `?1` `!1` | Changed files git counts no lines for (renames, binary files), untracked and conflicted files |
 | `↑3` `↓2` | Commits ahead of and behind its upstream |
 | `⎇ main` | The branch, or `⎇ @abc1234` when detached |
 | `✗ missing` `✗ unreadable` | A worktree whose folder has gone, or that git can't read |
 
-The pane's buttons run one job at a time. While one runs the pane says so, and when it ends a toast says what it did.
+Refresh and Fetch all are always there; the other buttons show only when there's something for them to do. The buttons run one job at a time. While one runs the pane says so, and when it ends a toast says what it did.
 
 | Button | What it does |
 | --- | --- |
@@ -64,18 +65,22 @@ The pane's buttons run one job at a time. While one runs the pane says so, and w
 | **Remove merged** (`m`) | Offers to remove worktrees whose work is done: clean, nothing unpushed, and the branch already in the main branch |
 | **Remove unreadable** (`u`) | Offers to remove worktrees git can't read (`✗ unreadable`), usually because their repo has moved since they were made |
 
-#### What the remove buttons do, and don't
+#### What removing a worktree does, and doesn't
 
-Removing a worktree deletes its folder, so both remove buttons go carefully:
+Removing a worktree deletes its folder, so both remove buttons, and a worktree's `✕`, go carefully:
 
 - Nothing goes without asking. The question lists each worktree's full path and its repo. Cancel, or closing the dialog, removes nothing.
 - Once you answer, every repo is read again, and only worktrees still in the state you were shown are removed.
 - `git worktree remove` does the removing, never with `--force`, so git refuses any worktree with modified or untracked files and leaves it be. Files git ignores, such as build output or a `.env`, go with the folder, and the question says so.
 - Branches and commits stay in the repo. Only the checkout goes, and `git worktree add` brings it back.
-- The worktree the session is working in is never offered.
+- The worktree the session is working in is never offered and has no `✕`. Nor does a `✗ missing` one: Prune missing clears those.
 - Each removal, and each worktree git kept, is noted in the transcript.
 
 Remove merged counts a branch as merged when its tip is in the main branch, locally or on `origin`. A branch still at the main branch's tip counts as new, and squash merges aren't spotted, so both are left alone. Remove unreadable first runs `git worktree repair`, which only rewrites git's link between the worktree and its repo, so git can check the worktree for changes. Worktrees can live outside the workspace (`~/.cursor/worktrees/…`), and the buttons act on the paths git lists for each repo, wherever they are.
+
+#### Switching a branch
+
+Clicking a branch opens a dropdown in its place with the repo's local branches, most recently committed first, leaving out any already checked out in one of its trees. Pick the current branch or `✕` to close it. Picking another runs `git switch <branch>`, never with `--force` or `--discard-changes`, so uncommitted changes come along, or git refuses the switch if they'd clash and the toast says why. Only existing local branches are switched to: nothing is created.
 
 ### `/repos-fetch`
 
@@ -177,16 +182,19 @@ Each runs as `git --no-optional-locks -C <repo> …`, in the C locale, with `GIT
 | Command | When |
 | --- | --- |
 | `status --porcelain=v2 --branch --untracked-files=normal` | Every refresh, for each repo and worktree |
+| `diff HEAD --shortstat` | Every refresh, for each repo and worktree with changes, to count lines |
 | `worktree list --porcelain` | Every refresh, for each repo |
 | `log -5 --format=%h %s` | Every refresh, for each repo |
 | `symbolic-ref --short refs/remotes/origin/HEAD`, then `rev-parse --verify --quiet refs/heads/main` or `master` | Every refresh, to name the main branch |
 | `fetch --all --prune --quiet` | Only from `/repos-fetch` or the pane's Fetch all |
 | `worktree prune` | Only from the pane's Prune missing |
-| `rev-parse --verify --quiet`, `merge-base --is-ancestor` | Only from the pane's Remove merged, to find merged branches |
+| `rev-parse --verify --quiet`, `merge-base --is-ancestor` | Every refresh and from the pane's Remove merged, for clean worktrees on another branch, to find merged branches |
 | `worktree repair -- <path>` | Only from the pane's Remove unreadable, after you confirm |
-| `worktree remove -- <path>` | Only from the pane's Remove merged and Remove unreadable, after you confirm |
+| `worktree remove -- <path>` | Only from the pane's Remove merged and Remove unreadable, or a worktree's `✕`, after you confirm |
+| `for-each-ref --sort=-committerdate refs/heads` | Only when you click a branch in the pane, to offer branches |
+| `show-ref --verify --quiet refs/heads/<branch>`, then `switch <branch>` | Only after you pick a branch to switch to |
 
-Everything else only reads. The fetch is the only command that uses the network, and it runs only when you ask for it.
+Everything else only reads, and nothing writes without you pressing something. The fetch is the only command that uses the network, and it runs only when you ask for it.
 
 ## Developing
 

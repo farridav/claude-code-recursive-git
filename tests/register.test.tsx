@@ -32,7 +32,8 @@ function workspace(
     const [, , , path, command] = e.argv // git --no-optional-locks -C <path> <command>
     if (command === 'status') {
       const untracked = path === '/ws/api' && state.dirty ? '? todo.txt\n' : ''
-      return { value: ok(`# branch.oid abcdef1234\n# branch.head main\n${untracked}`) }
+      const head = path === '/ws/.wt/api-fix' ? 'fix' : 'main'
+      return { value: ok(`# branch.oid abcdef1234\n# branch.head ${head}\n${untracked}`) }
     }
     if (command === 'worktree') {
       const linked = path === '/ws/api' ? 'worktree /ws/.wt/api-fix\nHEAD 1\nbranch refs/heads/fix\n\n' : ''
@@ -40,6 +41,7 @@ function workspace(
     }
     if (command === 'log') return { value: ok('abcdef1 Initial commit\n') }
     if (command === 'symbolic-ref') return { value: ok('origin/main\n') }
+    if (command === 'for-each-ref') return { value: ok('fix\nmain\nold\n') }
     return { value: ok('') }
   })
   on('tool.register', (_, e) => ({ value: { tool: `mcp__multi-repo__${e.name}` } }))
@@ -119,13 +121,10 @@ describe('register', () => {
     await $.session.start({ cwd: '/ws', surface: 'terminal', isInteractive: true })
 
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    for (const key of ['refresh', 'prune', 'merged', 'unreadable']) await pane.press({ key })
-    expect(toasts).toEqual([
-      'Refreshed 3 repos',
-      'No missing worktrees to prune',
-      'No merged worktrees to remove',
-      'No unreadable worktrees to remove',
-    ])
+    await pane.press({ key: 'refresh' })
+    expect(toasts).toEqual(['Refreshed 3 repos'])
+    // Nothing is missing, merged or unreadable, so those buttons stay hidden.
+    for (const key of ['prune', 'merged', 'unreadable']) expect(await pane.find({ key })).toBeUndefined()
     await pane.unmount()
   })
 
@@ -160,5 +159,66 @@ describe('register', () => {
       expect(run.argv.slice(0, 3)).toEqual(['git', '--no-optional-locks', '-C'])
       expect(run.env).toEqual({ LC_ALL: 'C', LANGUAGE: '', GIT_TERMINAL_PROMPT: '0' })
     }
+  })
+
+  test('pressing a worktree offers to remove it, and pressing a branch offers to switch it', async ($, on) => {
+    const runs: { argv: readonly string[] }[] = []
+    workspace(on, { dirty: false }, runs)
+    const toasts: string[] = []
+    on('ui.toast', (_, e) => (toasts.push(e.text), { value: undefined }))
+    on('ui.log', () => ({ value: undefined }))
+    const asked: { question: string; options: string[] }[] = []
+    const answers = ['Cancel', 'Remove']
+    on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => {
+      const [first] = e.questions
+      asked.push({ question: first?.question ?? '', options: first?.options.map(one => one.label) ?? [] })
+      return { result: { questions: e.questions, answers: { [first?.question ?? '']: answers.shift() } } }
+    })
+    await $.session.start({ cwd: '/ws', surface: 'terminal', isInteractive: true })
+    const ran = (verb: string) => runs.filter(run => run.argv[4] === verb).map(run => run.argv.slice(3).join(' '))
+
+    for (const surface of ['terminal', 'desktop'] as const) {
+      runs.length = 0
+      answers.splice(0, answers.length, 'Cancel', 'Remove')
+      const pane = await $.ui.mount({ ...PANE, surface })
+
+      await pane.press({ key: 'remove:/ws/.wt/api-fix' })
+      expect(asked.at(-1)?.question).toStartWith('/ws/.wt/api-fix (api). Remove this worktree, keeping its branch?')
+      await pane.press({ key: 'remove:/ws/.wt/api-fix' })
+      expect(ran('worktree').filter(one => one.includes('remove'))).toEqual(['/ws/api worktree remove -- /ws/.wt/api-fix'])
+
+      // The branch opens a dropdown in its place: the current branch, then the free ones.
+      await pane.press({ key: 'branch:/ws/api' })
+      const picker = await pane.find({ key: 'pick:/ws/api' })
+      expect((picker?.props.options as { value: string }[]).map(one => one.value)).toEqual(['⎇ main', 'old']) // fix is checked out
+      await pane.press({ key: 'pick-close:/ws/api' })
+      expect(await pane.find({ key: 'pick:/ws/api' })).toBeUndefined()
+      expect(ran('switch')).toEqual([])
+
+      await pane.press({ key: 'branch:/ws/api' })
+      await pane.select({ key: 'pick:/ws/api', value: 'old' })
+      expect(ran('switch')).toEqual(['/ws/api switch old'])
+      expect(await pane.find({ key: 'pick:/ws/api' })).toBeUndefined()
+      expect(toasts.slice(-3)).toEqual(['Nothing removed', 'Removed 1 worktree', 'Switched to old'])
+      await pane.unmount()
+    }
+  })
+
+  test('PR drafts the ask in the prompt box, keeping what was typed', async ($, on) => {
+    workspace(on, { dirty: false })
+    const fills: { text: string; mode: string }[] = []
+    let draft = ''
+    on('prompt.read', () => ({ value: { text: draft, cursor: draft.length } }))
+    on('prompt.fill', (_, e) => (fills.push({ text: e.text, mode: e.mode }), { isFilled: true }))
+    await $.session.start({ cwd: '/ws', surface: 'terminal', isInteractive: true })
+
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await pane.find({ key: 'pr:/ws/api' })).toBeUndefined() // main is the main branch
+    await pane.press({ key: 'pr:/ws/.wt/api-fix' })
+    draft = 'also check CI'
+    await pane.press({ key: 'pr:/ws/.wt/api-fix' })
+    expect(fills.map(one => one.mode)).toEqual(['replace', 'append'])
+    expect(fills[0]?.text).toStartWith('Open a pull request for fix in api (/ws/.wt/api-fix) into main.')
+    await pane.unmount()
   })
 })

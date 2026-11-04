@@ -12,6 +12,9 @@ export type TreeStatus = {
   unstaged: number
   untracked: number
   conflicted: number
+  /** Lines added and removed against HEAD, staged and unstaged together; untracked files aren't counted. */
+  added: number
+  removed: number
   /** Short status lines (`M  src/app.py`), capped. */
   files: string[]
   /** Set when git worktree list marks the worktree prunable (its folder is gone). */
@@ -45,6 +48,10 @@ declare module 'claude-code' {
       folded: string[]
       /** The pane's job in flight (`Fetching`), or null; the pane ignores presses until it ends. */
       busy: string | null
+      /** Worktree paths whose branch is already in the main branch, found at each refresh. */
+      merged: string[]
+      /** The tree whose branch dropdown is open in the /repos pane, and the branches it offers. */
+      picking: { path: string; branches: string[] } | null
     }
   }
 }

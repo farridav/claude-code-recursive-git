@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { Register, Timer } from 'claude-code'
 
-import type { RepoStatus } from '../types'
-import type { Io, Linked } from './git'
+import type { RepoStatus, TreeStatus } from '../types'
+import type { Io, Linked, TreeRow } from './git'
 import {
   DEFAULT_IGNORE,
   GUIDANCE,
@@ -21,6 +21,8 @@ import {
   scanAll,
   shortState,
   summaryLine,
+  switchBranch,
+  switchableBranches,
   treeRows,
   unreadableWorktrees,
 } from './git'
@@ -38,14 +40,17 @@ type Session = Io & {
   now: () => Promise<number>
   root: () => Promise<string | null>
   saveRepos: (repos: RepoStatus[]) => Promise<unknown>
+  saveMerged: (paths: string[]) => Promise<unknown>
   after: (ms: number, fn: () => void) => Timer
 }
 
-const reposAtom = atom({ plugin: 'multi-repo', key: 'repos' } as const, [], { shape: 'repos-1' })
+const reposAtom = atom({ plugin: 'multi-repo', key: 'repos' } as const, [], { shape: 'repos-2' })
 const rootAtom = atom({ plugin: 'multi-repo', key: 'workspaceRoot' } as const, null)
 const reportedAtom = atom({ plugin: 'multi-repo', key: 'reported' } as const, null)
 const foldedAtom = atom({ plugin: 'multi-repo', key: 'folded' } as const, [])
 const busyAtom = atom({ plugin: 'multi-repo', key: 'busy' } as const, null)
+const mergedAtom = atom({ plugin: 'multi-repo', key: 'merged' } as const, [])
+const pickingAtom = atom({ plugin: 'multi-repo', key: 'picking' } as const, null)
 
 export const register: Register = (on, options) => {
   const maxDepth = Number(options.scanDepth ?? 4)
@@ -74,6 +79,8 @@ export const register: Register = (on, options) => {
       if (!root) return []
       const repos = await scanAll(s, root, maxDepth, ignore)
       await s.saveRepos(repos)
+      // Only clean worktrees on another branch are checked, so this stays a few git calls.
+      await s.saveMerged((await mergedWorktrees(s, repos)).map(({ tree }) => tree.path))
       lastScanAt = await s.now()
       return repos
     })().finally(() => {
@@ -102,6 +109,7 @@ export const register: Register = (on, options) => {
       now: () => $.clock.now(),
       root: () => read($, rootAtom),
       saveRepos: repos => update($, reposAtom, () => repos),
+      saveMerged: paths => update($, mergedAtom, () => paths),
       after: (ms, fn) => $.clock.after(ms, fn),
     }
     if (!(await read($, rootAtom))) {
@@ -254,11 +262,16 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Button, Text } = elements
+    // Mobile draws no Select, so there the branch is plain text.
+    const Select = 'Select' in elements ? elements.Select : null
     const repos = await read($, reposAtom)
     const root = (await read($, rootAtom)) ?? ''
     const folded = await read($, foldedAtom)
     const busy = await read($, busyAtom)
+    const merged = await read($, mergedAtom)
+    const picking = await read($, pickingAtom)
     const toggle = (path: string) =>
       update($, foldedAtom, paths => (paths.includes(path) ? paths.filter(one => one !== path) : [...paths, path]))
 
@@ -279,7 +292,8 @@ export const register: Register = (on, options) => {
 
     // Never the worktree this session is working in.
     const here = (await $.session.cwd()).replace(/\/+$/, '')
-    const isElsewhere = ({ tree }: Linked) => here !== tree.path && !here.startsWith(`${tree.path}/`)
+    const isHere = (path: string) => here === path || here.startsWith(`${path}/`)
+    const isElsewhere = ({ tree }: Linked) => !isHere(tree.path)
 
     // Lists each worktree by its full path and asks. Then reads every repo
     // afresh and removes only those still in the state that was listed, and
@@ -288,7 +302,7 @@ export const register: Register = (on, options) => {
       const found = (await find(await refresh())).filter(isElsewhere)
       if (found.length === 0) return `No ${what} worktrees to remove`
       const listed = found.map(({ repo, tree }) => `${tree.path} (${repo.name})`).join('; ')
-      const question = `${listed}. Remove ${found.length === 1 ? 'this worktree' : `these ${found.length} worktrees`}, keeping their branches? Git keeps any with uncommitted changes; files it ignores, such as build output or .env, go with the folder.`
+      const question = `${listed}. Remove ${found.length === 1 ? 'this worktree, keeping its branch' : `these ${found.length} worktrees, keeping their branches`}? Git keeps any with uncommitted changes; files it ignores, such as build output or .env, go with the folder.`
       const answer = await $.ui.ask(question, ['Remove', 'Cancel']).catch(() => 'Cancel')
       if (answer !== 'Remove') return 'Nothing removed'
       const agreed = new Set(found.map(({ tree }) => tree.path))
@@ -300,6 +314,104 @@ export const register: Register = (on, options) => {
       return [`Removed ${plural(removed.length, 'worktree')}`, kept.length ? `kept ${kept.length}, see the transcript` : '']
         .filter(Boolean)
         .join('; ')
+    }
+
+    // A worktree other than the session's own, whose folder is still there, has a ✕ to remove it.
+    const isRemovable = (row: TreeRow) =>
+      row.kind === 'worktree' && row.tree !== null && !row.tree.isPrunable && !isHere(row.tree.path)
+
+    const owner = new Map(repos.flatMap(repo => [repo.tree, ...repo.worktrees].map(tree => [tree.path, repo] as const)))
+
+    const removeOne = (path: string) =>
+      job('Removing worktree', async s => {
+        const pick = async (all: RepoStatus[]) =>
+          all.flatMap(repo =>
+            repo.worktrees.filter(tree => tree.path === path && !tree.isPrunable).map(tree => ({ repo, tree })),
+          )
+        const tree = owner.get(path)?.worktrees.find(one => one.path === path)
+        return removeAll(s, pick, 'such', tree?.error != null)
+      })
+
+    // Pressing a branch opens a dropdown of the tree's local branches in its place.
+    const openPicker = (path: string) => async () => {
+      const repo = owner.get(path)
+      const tree = repo && [repo.tree, ...repo.worktrees].find(one => one.path === path)
+      if (!session || !repo || !tree) return
+      const branches = await switchableBranches(session, repo, tree)
+      if (branches.length === 0) return $.ui.toast('No other local branch is free to switch to')
+      await update($, pickingAtom, () => ({ path, branches }))
+    }
+    const closePicker = () => void update($, pickingAtom, () => null)
+
+    // Writing a PR is the agent's work: this drafts the ask in the prompt box, to edit or send.
+    const draftPullRequest = (path: string) => async () => {
+      const repo = owner.get(path)
+      const tree = repo && [repo.tree, ...repo.worktrees].find(one => one.path === path)
+      if (!repo || !tree?.branch) return
+      const into = repo.defaultBranch ?? 'the main branch'
+      const ask = `Open a pull request for ${tree.branch} in ${repo.name} (${tree.path}) into ${into}. Push the branch if it needs it, and write the title and description from its commits.`
+      const { text: draft } = await $.prompt.read()
+      const filled = await $.prompt.fill(draft.trim() ? { text: `\n${ask}`, mode: 'append' } : { text: ask })
+      if (!filled.isFilled) $.ui.toast('Could not reach the prompt box')
+    }
+
+    const switchTo = (path: string, branch: string) =>
+      job('Switching branch', async s => {
+        await update($, pickingAtom, () => null)
+        const repo = owner.get(path)
+        const tree = repo && [repo.tree, ...repo.worktrees].find(one => one.path === path)
+        if (!repo || !tree) return 'That tree has gone'
+        const from = tree.branch ?? `@${tree.head ?? '?'}`
+        const refused = await switchBranch(s, path, branch)
+        await refresh()
+        if (refused) return `Stayed on ${from}: ${refused}`
+        $.ui.log(`Switched ${tree.path} from ${from} to ${branch} (${repo.name})`)
+        return `Switched to ${branch}`
+      })
+
+    // The branch, last, is a button that offers to switch the tree's branch.
+    // Text in a Button doesn't truncate, so the branch is cut to the room left,
+    // and a narrow pane cuts it before the markers.
+    const rowMarks = (tree: TreeStatus, defaultBranch: string | null, used: number) => {
+      const all = marks(tree, defaultBranch)
+      const hasBranch = !tree.isPrunable && tree.error === null
+      const branch = hasBranch ? all.pop() : undefined
+      const drawn = all.map(mark => <Text color={mark.color} mono>{` ${mark.text}`}</Text>)
+      if (!branch) return drawn
+      if (!Select) return [...drawn, <Text color={branch.color} mono>{` ${branch.text}`}</Text>]
+      if (picking?.path === tree.path) {
+        const current = branch.text
+        return [
+          ...drawn,
+          <Text> </Text>,
+          <Select
+            key={`pick:${tree.path}`}
+            autoFocus
+            value={current}
+            options={[{ value: current, label: current }, ...picking.branches.map(name => ({ value: name, label: name }))]}
+            onSelect={(value: string) => (value === current ? closePicker() : void switchTo(tree.path, value)())}
+          />,
+          <Text> </Text>,
+          <Button plain key={`pick-close:${tree.path}`} label="✕" onPress={closePicker} />,
+        ]
+      }
+      // A branch other than the main one, not merged yet, can be raised as a PR.
+      const canRaise = tree.branch !== null && tree.branch !== defaultBranch && !merged.includes(tree.path)
+      const pr = canRaise
+        ? [<Text> </Text>, <Button plain dimColor key={`pr:${tree.path}`} label="PR" onPress={draftPullRequest(tree.path)} />]
+        : []
+      const room = e.props.bodyColumns - used - all.reduce((sum, mark) => sum + mark.text.length + 1, 0) - 1 - (canRaise ? 3 : 0)
+      const fitted = branch.text.length > room ? `${branch.text.slice(0, Math.max(room - 1, 2))}…` : branch.text
+      return [
+        ...drawn,
+        <Text> </Text>,
+        <Button plain key={`branch:${tree.path}`} onPress={openPicker(tree.path)}>
+          <Text color={branch.color} mono>
+            {fitted}
+          </Text>
+        </Button>,
+        ...pr,
+      ]
     }
 
     const buttons = [
@@ -324,6 +436,7 @@ export const register: Register = (on, options) => {
       },
       {
         key: 'prune',
+        isShown: repos.some(repo => repo.worktrees.some(tree => tree.isPrunable)),
         hotkey: 'p',
         label: 'Prune missing',
         doing: 'Pruning',
@@ -336,6 +449,7 @@ export const register: Register = (on, options) => {
       },
       {
         key: 'merged',
+        isShown: merged.some(path => !isHere(path)),
         hotkey: 'm',
         label: 'Remove merged',
         doing: 'Removing merged worktrees',
@@ -343,6 +457,7 @@ export const register: Register = (on, options) => {
       },
       {
         key: 'unreadable',
+        isShown: repos.some(repo => repo.worktrees.some(tree => tree.error !== null && !isHere(tree.path))),
         hotkey: 'u',
         label: 'Remove unreadable',
         doing: 'Removing unreadable worktrees',
@@ -353,7 +468,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         <Box flexWrap="wrap" columnGap="sm" rowGap="xs">
-          {buttons.map(button => (
+          {buttons.filter(button => button.isShown !== false).map(button => (
             <Button
               key={button.key}
               hotkey={button.hotkey}
@@ -388,14 +503,19 @@ export const register: Register = (on, options) => {
               </Button>
             </Box>
           ) : (
-            <Text wrap="truncate" mono>
-              <Text dimColor>{row.prefix}</Text>
-              <Text bold={row.kind === 'repo'} italic={row.kind === 'worktree'}>
+            <Box>
+              <Text dimColor mono>
+                {row.prefix}
+              </Text>
+              <Text bold={row.kind === 'repo'} italic={row.kind === 'worktree'} mono>
                 {row.name}
               </Text>
-              {row.tree &&
-                marks(row.tree, row.defaultBranch).map(mark => <Text color={mark.color}>{` ${mark.text}`}</Text>)}
-            </Text>
+              {isRemovable(row) && [
+                <Text> </Text>,
+                <Button plain dimColor key={`remove:${row.path}`} label="✕" onPress={removeOne(row.path)} />,
+              ]}
+              {row.tree && rowMarks(row.tree, row.defaultBranch, row.prefix.length + row.name.length + (isRemovable(row) ? 2 : 0))}
+            </Box>
           ),
         )}
       </Box>
