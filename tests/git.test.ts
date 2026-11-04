@@ -11,12 +11,14 @@ import {
   formatChanges,
   formatTable,
   needsAttention,
+  parseShortstat,
   parseStatus,
   parseWorktreeList,
   relativePath,
   resolvePath,
   shortState,
   summaryLine,
+  switchBranch,
   treeRows,
   worktreeName,
 } from '../hooks/git'
@@ -165,24 +167,26 @@ describe('git', () => {
 
   test('formatTable draws the repos as a tree, with markers before the branch', () => {
     const clean = parseStatus('/ws/api', '# branch.oid aaaaaaa\n# branch.head main\n')
-    const fix = { ...clean, path: '/ws/api/.worktrees/api--fix', branch: 'fix' }
+    const fix = { ...clean, path: '/ws/api/.worktrees/api--fix', branch: 'fix', unstaged: 1 }
     const broken = { ...emptyTree('/elsewhere/stale'), error: 'fatal: not a git repository: /old/.git/worktrees/stale' }
     const api = { name: 'api', path: '/ws/api', defaultBranch: 'main', recent: [], tree: clean, worktrees: [fix, broken] }
-    const deep = { ...api, name: 'group/a/b/deep', tree: { ...clean, branch: 'feature', staged: 1, untracked: 1, ahead: 2 }, worktrees: [] }
+    const deep = { ...api, name: 'group/a/b/deep', tree: { ...clean, branch: 'feature', staged: 1, added: 228, removed: 28, untracked: 1, ahead: 2 }, worktrees: [] }
     const web = { ...api, name: 'services/web', tree: { ...clean, behind: 3 }, worktrees: [] }
     const worker = { ...api, name: 'services/worker', worktrees: [] }
 
     expect(formatTable([api, deep, web, worker]).split('\n')).toEqual([
       '├── api ✓ ⎇ main',
-      '│   ├── fix ✓ ⎇ fix',
+      '│   ├── fix ~1 ⎇ fix',
       '│   └── stale ✗ unreadable',
       '├── group/a/b/',
-      '│   └── deep +1 ?1 ↑2 ⎇ feature',
+      '│   └── deep +228 −28 ?1 ↑2 ⎇ feature',
       '└── services/',
       '    ├── web ↓3 ⎇ main',
       '    └── worker ✓ ⎇ main',
     ])
     expect(describeRepo(api)).toContain('Error: fatal: not a git repository: /old/.git/worktrees/stale')
+    expect(parseShortstat(' 3 files changed, 228 insertions(+), 28 deletions(-)\n')).toEqual({ added: 228, removed: 28 })
+    expect(parseShortstat(' 1 file changed, 1 deletion(-)\n')).toEqual({ added: 0, removed: 1 })
   })
 
   test('a folded folder hides its repos and counts them', () => {
@@ -208,5 +212,22 @@ describe('git', () => {
 
     expect(summaryLine([api], '/ws')).toBe('⎇ 1 repo')
     expect(summaryLine([api, { ...web, worktrees: [behind] }], '/ws')).toBe('⎇ 2 repos · 1 worktree · 1 ahead')
+  })
+
+  test('switchBranch only switches to an existing local branch named as typed', async () => {
+    const runs: string[] = []
+    const io: Io = {
+      list: async () => [],
+      readFile: async () => '',
+      run: async argv => {
+        runs.push(argv.slice(4).join(' '))
+        const exitCode = argv.includes('refs/heads/gone') ? 1 : 0
+        return { exitCode, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+      },
+    }
+    expect(await switchBranch(io, '/ws/api', '--orphan')).toBe('"--orphan" is not a branch name')
+    expect(await switchBranch(io, '/ws/api', 'gone')).toBe('No local branch "gone"')
+    expect(await switchBranch(io, '/ws/api', 'fix')).toBeNull()
+    expect(runs).toEqual(['show-ref --verify --quiet refs/heads/gone', 'show-ref --verify --quiet refs/heads/fix', 'switch fix'])
   })
 })

@@ -171,6 +171,8 @@ export function emptyTree(path: string): TreeStatus {
     unstaged: 0,
     untracked: 0,
     conflicted: 0,
+    added: 0,
+    removed: 0,
     files: [],
     isPrunable: false,
     error: null,
@@ -218,7 +220,18 @@ async function git(io: Io, path: string, args: string[], timeoutMs = 15_000) {
 async function readTree(io: Io, path: string): Promise<TreeStatus> {
   const ran = await git(io, path, ['status', '--porcelain=v2', '--branch', '--untracked-files=normal'])
   if (ran.exitCode !== 0) return { ...emptyTree(path), error: ran.stderr.trim().split('\n')[0] || 'git status failed' }
-  return parseStatus(path, ran.stdout)
+  const tree = parseStatus(path, ran.stdout)
+  if (tree.head === null || (tree.staged === 0 && tree.unstaged === 0)) return tree
+  const diff = await git(io, path, ['diff', 'HEAD', '--shortstat'])
+  return diff.exitCode === 0 ? { ...tree, ...parseShortstat(diff.stdout) } : tree
+}
+
+/** `git diff --shortstat`'s line counts: ` 3 files changed, 228 insertions(+), 28 deletions(-)`. */
+export function parseShortstat(stdout: string): { added: number; removed: number } {
+  return {
+    added: Number(/(\d+) insertion/.exec(stdout)?.[1] ?? 0),
+    removed: Number(/(\d+) deletion/.exec(stdout)?.[1] ?? 0),
+  }
 }
 
 async function readDefaultBranch(io: Io, path: string): Promise<string | null> {
@@ -367,6 +380,34 @@ export async function removeWorktrees(
   return { removed, kept }
 }
 
+// ---------------------------------------------------------------- branches
+
+/**
+ * A tree's local branches it could switch to, most recently committed first:
+ * not its own, and not one checked out in another of the repo's trees, which
+ * git would refuse.
+ */
+export async function switchableBranches(io: Io, repo: RepoStatus, tree: TreeStatus): Promise<string[]> {
+  const ran = await git(io, repo.path, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads'])
+  if (ran.exitCode !== 0) return []
+  const taken = new Set([repo.tree, ...repo.worktrees].map(one => one.branch))
+  taken.add(tree.branch)
+  return ran.stdout.split('\n').filter(name => name && !taken.has(name))
+}
+
+/**
+ * `git switch <branch>` in one tree, to an existing local branch only. Never
+ * `--force` or `--discard-changes`: uncommitted changes come along, or git
+ * refuses when they would clash. Returns git's reason when it refuses.
+ */
+export async function switchBranch(io: Io, path: string, branch: string): Promise<string | null> {
+  if (!branch || branch.startsWith('-')) return `"${branch}" is not a branch name`
+  const exists = await git(io, path, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])
+  if (exists.exitCode !== 0) return `No local branch "${branch}"`
+  const ran = await git(io, path, ['switch', branch])
+  return ran.exitCode === 0 ? null : ran.stderr.trim().split('\n')[0] || 'git refused'
+}
+
 // ---------------------------------------------------------------- text
 
 export function isDirty(tree: TreeStatus): boolean {
@@ -476,7 +517,8 @@ export type Mark = { text: string; color: string }
 
 /**
  * A tree's state as short markers, each with its own symbol so it reads
- * without colour: `!` conflicted, `+` staged, `~` modified, `?` untracked,
+ * without colour: `!` conflicted, `+`/`−` lines added and removed (`~` files
+ * changed where git counts no lines), `?` untracked,
  * `↑`/`↓` ahead/behind, `✓` clean and in step. The branch comes last, so a
  * narrow pane cuts it before the markers.
  */
@@ -485,8 +527,13 @@ export function marks(tree: TreeStatus, defaultBranch: string | null): Mark[] {
   if (tree.error) return [{ text: '✗ unreadable', color: 'error' }]
   const out: Mark[] = []
   if (tree.conflicted) out.push({ text: `!${tree.conflicted}`, color: 'error' })
-  if (tree.staged) out.push({ text: `+${tree.staged}`, color: 'success' })
-  if (tree.unstaged) out.push({ text: `~${tree.unstaged}`, color: 'warning' })
+  if (tree.added || tree.removed) {
+    if (tree.added) out.push({ text: `+${tree.added}`, color: 'success' })
+    if (tree.removed) out.push({ text: `−${tree.removed}`, color: 'error' })
+  } else if (tree.staged + tree.unstaged) {
+    // Changes with no lines to count: renames, modes, binary files.
+    out.push({ text: `~${tree.staged + tree.unstaged}`, color: 'warning' })
+  }
   if (tree.untracked) out.push({ text: `?${tree.untracked}`, color: 'warning' })
   if (tree.ahead) out.push({ text: `↑${tree.ahead}`, color: 'suggestion' })
   if (tree.behind) out.push({ text: `↓${tree.behind}`, color: 'inactive' })
